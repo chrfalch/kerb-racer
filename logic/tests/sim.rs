@@ -259,3 +259,38 @@ fn radar_follows_the_player_and_names_the_neighbours() {
     assert_eq!(r.behind.is_empty(), place == 5);
     assert!(r.ahead.is_empty() || r.ahead.ends_with('s'));
 }
+
+#[test]
+fn cars_drift_through_corners() {
+    let mut game = race(0);
+    game.key_down("KeyW");
+    // Every car's slip angle on the road, in the slow corners and on the straights.
+    let (mut corner, mut straight) = ((0.0f32, 0), (0.0f32, 0));
+    for _ in 0..(120 * 60) {
+        game.run(1000.0 / 120.0);
+        let w = game.world();
+        let t = w.resource::<Track>();
+        for (_, car) in w.query::<&Car>().iter().filter(|(_, c)| c.ai) {
+            let speed = (car.vx * car.vx + car.vz * car.vz).sqrt();
+            if speed < 8.0 || car.surface == GRASS {
+                continue;
+            }
+            let slip = (car.heading - car.vz.atan2(car.vx)).sin_cos();
+            let slip = slip.0.atan2(slip.1).abs().to_degrees();
+            let planned = t.speed[car.idx as usize];
+            let bucket = if planned < 18.0 {
+                &mut corner
+            } else if planned > 26.0 {
+                &mut straight
+            } else {
+                continue;
+            };
+            bucket.0 += slip;
+            bucket.1 += 1;
+        }
+    }
+    let (corner, straight) = (corner.0 / corner.1 as f32, straight.0 / straight.1 as f32);
+    println!("slip: corners {corner:.1}°, straights {straight:.1}°");
+    assert!(corner > 6.0, "the tail hangs out in corners: {corner:.1}°");
+    assert!(straight < corner / 2.0, "and straightens up after: {straight:.1}°");
+}
