@@ -29,9 +29,19 @@ buffer blocking in submit/getCurrentTexture/setBindGroup while the GPU catches u
 | lens blur gathered at half resolution | 7.4 | 12.0 |
 | exact2: shadow plane PCF via textureGather | 7.4 | 10.8 |
 | exact2: SSAO upsample reads stored view z | 6.85 | 10.2 |
+| RenderScale 1.5 (Medium) / 1.75 (High); Low 1.25 → 1.75 ms | 4.1 | 8.2 |
 
 Feature costs measured by switching each off (at the start):
 real-time shadows ≈ 4.4 (High; half of it the low sun's slope-corrected PCF),
 lens ≈ 3.3, SSAO ≈ 3.0, bloom ≈ 1.9, undergrowth < 1 (noise).
 Cascade layout barely matters (one cascade ≈ −0.3). SSAO `Low` ≈ −0.2.
-Rendering at devicePixelRatio 1.5 instead of 2: Medium 4.4, High 6.8.
+Bloom is ≈ 1.45 of High's 8.2 after these: not its fetches (reading the bright
+pass's 6×6 block once with gathers changed nothing) but most likely its eleven
+small passes; fewer octaves would narrow the glow, so it is left alone.
+
+## Render scale
+
+`RenderScale { max_pixel_ratio }` (an exact2 resource, set in `light()`) caps
+the canvas's device pixels per point: 1.25 / 1.5 / 1.75 for Low / Medium /
+High. The browser stretches the picture; the HUD is DOM and stays at the
+display's ratio. The Apple hosts ignore the cap for now.
