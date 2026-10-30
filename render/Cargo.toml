@@ -1,0 +1,17 @@
+# Kerb Racers' render hooks (app.json game.render): a tilt-shift depth of field
+# and a warm grade over the engine's frame. Only the GPU shell links it; the
+# simulation never does.
+[package]
+name = "kerb-racers-render"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+workspace = "../.shells"
+
+[dependencies]
+exact-game.workspace = true
+exact-game-render.workspace = true
+exact-gpu.workspace = true
+
+[build-dependencies]
+exact-gpu-reflect.workspace = true

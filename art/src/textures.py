@@ -41,24 +41,25 @@ def save(name, rgb):
     img.file_format = "PNG"
     img.save()
 
-# Asphalt: grey aggregate, fine speckle, soft darker patches and a few tar seams.
+# Asphalt: a darker, warm grey aggregate, fine speckle, soft patches and a few tar seams.
 broad = fbm(4, 4, 11)
 fine = rng.random((N, N))
-speck = (fine > 0.985) * 0.18 - (fine < 0.02) * 0.12
+speck = (fine > 0.985) * 0.12 - (fine < 0.02) * 0.08
 grain = blur(rng.random((N, N)), 1) - 0.5
-v = 0.36 + 0.07 * (broad - 0.5) + 0.06 * grain + speck
+v = 0.30 + 0.05 * (broad - 0.5) + 0.045 * grain + speck
 seams = np.abs(fbm(2, 3, 21) - 0.5) < 0.002
-v = np.where(seams, v * 0.9, v)
-save("asphalt", np.stack([v * 0.97, v * 0.98, v * 1.03], -1))
+v = np.where(seams, v * 0.88, v)
+save("asphalt", np.stack([v * 1.03, v * 1.0, v * 0.97], -1))
 
-# Grass: warm meadow greens with clumps, sunlit tips and the odd dry patch.
-clumps = fbm(6, 5, 31)
-blades = blur(rng.random((N, N)), 1)
-dry = np.clip((fbm(3, 3, 41) - 0.7) * 3, 0, 1)
-g = 0.55 + 0.35 * (clumps - 0.5) + 0.25 * (blades - 0.5)
-r = 0.24 * g + 0.16 * dry
-gg = 0.50 * g + 0.08 * dry
-b = 0.14 * g + 0.02 * dry
+# Grass: a smooth, mown meadow: broad soft clumps, only a whisper of blade noise.
+clumps = fbm(3, 4, 31)
+blades = blur(rng.random((N, N)), 2)
+dry = np.clip((fbm(3, 3, 41) - 0.72) * 2, 0, 1)
+g = 0.56 + 0.16 * (clumps - 0.5) + 0.08 * (blades - 0.5)
+# A soft sage rather than a saturated lawn green.
+r = 0.38 * g + 0.12 * dry
+gg = 0.58 * g + 0.06 * dry
+b = 0.24 * g + 0.02 * dry
 save("grass", np.stack([r, gg, b], -1))
 
 # Clay run-off: rust red earth with pebbles.

@@ -1,14 +1,21 @@
 # Kerb Racers' cars: three 1970s rally icons, lofted from superellipse
-# cross-sections so they read as real cars from above.
+# cross-sections, then squashed into chunky toys: short, wide and tall on
+# big wheels, so they read at a glance from the camera high above.
 #   blender -b -P art/src/cars.py
 # Writes art/models/car-{0..5}.glb: nose along +X, wheels on the ground,
-# about 3.4 m long so they match the game's collision shape.
+# 3.2 m by 1.8 m so they match the game's collision shape.
 import bpy, bmesh, math, os, sys
+from mathutils import Matrix, Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from kit import OUT, reset, material, link, export  # noqa: E402
 
-LENGTH = 3.4
+LENGTH = 3.2
+# The body's width and height after the squash; the wheels are added afterwards
+# so they stay round.
+WIDTH = 1.78
+HEIGHT = 1.12
+WHEEL = 0.36
 
 
 def smooth_step(e0, e1, x):
@@ -181,7 +188,7 @@ def flat_on(o, shapes, x, y, lift):
 
 
 def livery(m, body, cabin, roof_x, bonnet_x, door_x, door_z, number, sponsor, ink, bands=()):
-    """Sponsor bands, race numbers on roof and doors, sponsor names on bonnet and flanks."""
+    """Sponsor bands, race numbers on roof and doors, the sponsor across the bonnet."""
     ink_m = material("ink", ink, rough=0.4)
     for k, (y0, y1, colour) in enumerate(bands):
         decal(f"band{k}", [body, cabin], -2.1, 2.1, y0, y1, material(f"band{k}", colour, rough=0.32), lift=0.02 + 0.002 * k, across=2)
@@ -197,8 +204,6 @@ def livery(m, body, cabin, roof_x, bonnet_x, door_x, door_z, number, sponsor, in
         hw = body(door_x)[0]
         num = text_mesh(f"door-num{s}", number, 0.22, ink_m, side=s)
         num.location = (door_x, s * (hw + 0.02), door_z)
-        flank = text_mesh(f"flank{s}", sponsor, 0.13, ink_m, side=s)
-        flank.location = (door_x - 0.95, s * (body(door_x - 0.95)[0] + 0.012), door_z - 0.12)
 
 
 def palette(paint, stripe, roof):
@@ -219,6 +224,14 @@ def palette(paint, stripe, roof):
 
 
 def wheels(m, front, rear, track, radius, width, rim_style="disc"):
+    """Remember where the wheels go: `finish` builds them after the squash."""
+    WHEELS[:] = [(m, front, rear, track, rim_style)]
+
+
+WHEELS = []
+
+
+def build_wheels(m, front, rear, track, radius, width, rim_style):
     for x in (front, rear):
         for s in (-1, 1):
             y = s * track
@@ -237,13 +250,110 @@ def mirrors(m, x, y, z):
         block(f"mirror{s}", (x, s * y, z), (0.1, 0.12, 0.07), m["chrome"], bevel=0.02)
 
 
-def finish(name, length):
-    scale = LENGTH / length
+def fender(m, x, y, width):
+    """A flared arch over one wheel: the cap of a squashed ellipsoid in the body
+    colour. It hides the top of the tyre from the camera above, and leaves its
+    side, rim and hub in view."""
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=20, ring_count=10, radius=1, location=(0, 0, 0))
+    o = bpy.context.active_object
+    o.name = f"fender{x:.2f}{y:.2f}"
+    bm = bmesh.new()
+    bm.from_mesh(o.data)
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if v.co.z < 0.55], context="VERTS")
+    bm.to_mesh(o.data)
+    bm.free()
+    o.data.transform(Matrix.Diagonal((WHEEL + 0.1, width / 2 + 0.05, WHEEL + 0.12, 1.0)))
+    o.data.transform(Matrix.Translation((x, y, WHEEL)))
+    o.data.materials.append(m["paint"])
+    for p in o.data.polygons:
+        p.use_smooth = True
+    return o
+
+
+def shadow(m):
+    """A soft dark blob under the car (vertex alpha, blended), so it sits on the road."""
+    mat = bpy.data.materials.new("contact")
+    mat.use_nodes = True
+    mat.blend_method = "BLEND"
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    p = nodes["Principled BSDF"]
+    p.inputs["Base Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+    p.inputs["Roughness"].default_value = 1.0
+    attr = nodes.new("ShaderNodeVertexColor")
+    attr.layer_name = "Col"
+    links.new(attr.outputs["Alpha"], p.inputs["Alpha"])
+    bm = bmesh.new()
+    col = bm.loops.layers.color.new("Col")  # becomes a corner byte colour on to_mesh
+    centre = bm.verts.new((0, 0, 0.012))
+    rings = []
+    for scale, alpha in ((0.62, 0.62), (1.0, 0.0)):
+        ring = []
+        for k in range(20):
+            a = k * math.tau / 20
+            c, s = math.cos(a), math.sin(a)
+            # A rounded rectangle a little larger than the car's plan.
+            x = math.copysign(abs(c) ** 0.5, c) * (LENGTH / 2 + 0.3) * scale
+            y = math.copysign(abs(s) ** 0.5, s) * (WIDTH / 2 + 0.25) * scale
+            ring.append((bm.verts.new((x, y, 0.012)), alpha))
+        rings.append(ring)
+    def tint(f, alphas):
+        for loop, a in zip(f.loops, alphas):
+            loop[col] = (0, 0, 0, a)
+    inner = rings[0]
+    for k in range(20):
+        j = (k + 1) % 20
+        tint(bm.faces.new([centre, inner[k][0], inner[j][0]]), [0.62, inner[k][1], inner[j][1]])
+    for a, b in zip(rings, rings[1:]):
+        for k in range(20):
+            j = (k + 1) % 20
+            tint(bm.faces.new([a[k][0], b[k][0], b[j][0], a[j][0]]), [a[k][1], b[k][1], b[j][1], a[j][1]])
+    for f in bm.faces:
+        if f.normal.z < 0:
+            f.normal_flip()
+    me = bpy.data.meshes.new("contact")
+    bm.to_mesh(me)
+    bm.free()
+    me.materials.append(mat)
+    link(bpy.data.objects.new("contact", me))
+
+
+ROUND = ("roof-disc", "roof-num", "bonnet-name", "door-num", "roundel", "lamp", "ring", "spot", "glass", "tail")
+
+
+def finish(name, length, width, height, body):
+    """Squash the body to toy proportions, then add round wheels and the shadow."""
+    sx, sy, sz = LENGTH / length, WIDTH / width, HEIGHT / height
     for o in bpy.context.scene.objects:
         if o.type == "MESH":
-            o.location *= scale
-            o.scale *= scale
-    export(name)
+            bpy.context.view_layer.objects.active = o
+            for mod in list(o.modifiers):
+                bpy.ops.object.modifier_apply(modifier=mod.name)
+            o.data.transform(o.matrix_world)
+            o.matrix_world.identity()
+            o.data.transform(Matrix.Diagonal((sx, sy, sz, 1.0)))
+            if o.name.startswith(ROUND) and o.name != "tailwing":
+                # Roundels, numbers and lamps keep their shape: unsquash them in place.
+                c = sum((v.co for v in o.data.vertices), Vector()) / len(o.data.vertices)
+                g = (sx + sy) / 2
+                o.data.transform(Matrix.Translation(c) @ Matrix.Diagonal((g / sx, g / sy, g / sz, 1.0)) @ Matrix.Translation(-c))
+    # Text and lamps lifted with the body: drop the body so its sills clear big wheels.
+    m, front, rear, track, rim_style = WHEELS[0]
+    # Tucked under the flared arches: the tyre's outer face just inside the fender.
+    width_w = 0.3
+    track = min(body(front)[0], body(rear)[0]) * sy - width_w / 2 - 0.03
+    build_wheels(m, front * sx, rear * sx, track, WHEEL, width_w, rim_style)
+    for x in (front * sx, rear * sx):
+        for side in (-1, 1):
+            fender(m, x, side * track, width_w)
+    for o in bpy.context.scene.objects:
+        if o.type == "MESH":
+            # White everywhere: the colours multiply the materials; only the shadow fades.
+            attr = o.data.color_attributes.new("Col", "FLOAT_COLOR", "CORNER")
+            for d in attr.data:
+                d.color = (1, 1, 1, 1)
+            o.data.color_attributes.active_color = attr
+    shadow(m)
+    export(name, colors=True)
 
 
 # --- Porsche 911 (1973 Carrera RS) -------------------------------------------
@@ -255,7 +365,7 @@ def porsche(name, paint, stripe, roof, number, sponsor, ink, bands=()):
     r = 0.31
 
     def body(x):
-        hw = 0.78 + 0.05 * bump(x, rear, 0.55) + 0.025 * bump(x, front, 0.45)
+        hw = 0.78 + 0.1 * bump(x, rear, 0.55) + 0.08 * bump(x, front, 0.5)
         hw *= (1 - smooth_step(1.75, 2.1, x) * 0.32) * (1 - smooth_step(-1.8, -2.1, x) * 0.22)
         zt = piecewise([(-2.08, 0.66), (-1.7, 0.82), (-1.1, 0.9), (0.6, 0.86), (1.25, 0.78), (2.08, 0.58)], x)
         # Front wings stand proud of the bonnet: the round headlamps sit in them.
@@ -271,7 +381,7 @@ def porsche(name, paint, stripe, roof, number, sponsor, ink, bands=()):
 
     loft("body", -2.08, 2.08, body, m["paint"])
     loft("cabin", -1.75, 0.62, cabin, m["glass"])
-    decal("roof", [cabin], -0.62, 0.0, -0.45, 0.45, m["roof"], lift=0.008)
+    decal("roof", [cabin], -0.72, 0.1, -0.52, 0.52, m["roof"], lift=0.008)
     decal("lid", [body, cabin], -1.95, -1.05, -0.5, 0.5, m["paint"], lift=0.006)
     for y in (-0.16, 0.16):
         decal(f"stripe{y}", [body, cabin], -2.0, 2.02, y - 0.07, y + 0.07, m["stripe"], lift=0.016, across=2)
@@ -290,7 +400,7 @@ def porsche(name, paint, stripe, roof, number, sponsor, ink, bands=()):
     livery(m, body, cabin, -0.3, 1.45, 0.05, 0.6, number, sponsor, ink, bands)
     mirrors(m, 0.45, 0.82, 0.88)
     wheels(m, front, rear, 0.72, r, 0.24, rim_style="fuchs")
-    finish(name, 4.16)
+    finish(name, 4.16, 1.7, 1.29, body)
 
 
 # --- Lancia Stratos HF ---------------------------------------------------------
@@ -302,7 +412,7 @@ def stratos(name, paint, stripe, roof, number, sponsor, ink, bands=()):
     r = 0.32
 
     def body(x):
-        hw = 0.84 + 0.04 * bump(x, rear, 0.5) + 0.04 * bump(x, front, 0.45)
+        hw = 0.84 + 0.08 * bump(x, rear, 0.5) + 0.08 * bump(x, front, 0.5)
         hw *= (1 - smooth_step(1.55, 1.86, x) * 0.25) * (1 - smooth_step(-1.6, -1.86, x) * 0.12)
         # The wedge: a sharp low nose rising straight to the screen.
         zt = piecewise([(-1.86, 0.84), (-0.5, 0.86), (0.35, 0.8), (1.86, 0.5)], x)
@@ -318,7 +428,7 @@ def stratos(name, paint, stripe, roof, number, sponsor, ink, bands=()):
 
     loft("body", -1.86, 1.86, body, m["paint"])
     loft("cabin", -0.75, 0.62, cabin, m["glass"])
-    decal("roof", [cabin], -0.62, -0.05, -0.5, 0.5, m["roof"], lift=0.008)
+    decal("roof", [cabin], -0.66, 0.05, -0.56, 0.56, m["roof"], lift=0.008)
     # Alitalia-style sweep: one broad and one thin band over the car.
     decal("band", [body, cabin], -1.84, 1.84, -0.3, 0.05, m["stripe"], lift=0.016, across=3)
     decal("pin", [body, cabin], -1.84, 1.84, 0.12, 0.2, m["stripe"], lift=0.016, across=2)
@@ -340,7 +450,7 @@ def stratos(name, paint, stripe, roof, number, sponsor, ink, bands=()):
     livery(m, body, cabin, -0.33, 0.85, 0.0, 0.55, number, sponsor, ink, bands)
     mirrors(m, 0.38, 0.84, 0.86)
     wheels(m, front, rear, 0.76, r, 0.26)
-    finish(name, 3.71)
+    finish(name, 3.71, 1.76, 1.11, body)
 
 
 # --- Ford Escort Mk1 RS ------------------------------------------------------
@@ -352,7 +462,7 @@ def escort(name, paint, stripe, roof, number, sponsor, ink, bands=()):
     r = 0.3
 
     def body(x):
-        hw = 0.76 + 0.07 * max(bump(x, rear, 0.42), bump(x, front, 0.42))
+        hw = 0.76 + 0.11 * max(bump(x, rear, 0.48), bump(x, front, 0.48))
         hw *= (1 - smooth_step(1.8, 2.0, x) * 0.1) * (1 - smooth_step(-1.8, -2.0, x) * 0.08)
         # Three boxes: flat bonnet, upright cabin, flat boot.
         zt = piecewise([(-2.0, 0.84), (-1.2, 0.88), (0.7, 0.86), (1.75, 0.82), (2.0, 0.72)], x)
@@ -367,7 +477,7 @@ def escort(name, paint, stripe, roof, number, sponsor, ink, bands=()):
 
     loft("body", -2.0, 2.0, body, m["paint"])
     loft("cabin", -1.25, 0.78, cabin, m["glass"])
-    decal("roof", [cabin], -0.75, 0.25, -0.5, 0.5, m["roof"], lift=0.008)
+    decal("roof", [cabin], -0.85, 0.3, -0.56, 0.56, m["roof"], lift=0.008)
     # A single broad stripe over bonnet, roof and boot, and side flashes.
     decal("stripe", [body, cabin], -1.98, 1.98, -0.22, 0.22, m["stripe"], lift=0.016, across=3)
     for s in (-1, 1):
@@ -386,21 +496,20 @@ def escort(name, paint, stripe, roof, number, sponsor, ink, bands=()):
     for y in (-0.48, -0.16, 0.16, 0.48):
         cyl(f"spot{y}", (2.12, y, 0.56), 0.085, 0.07, m["black"], axis="X", verts=16)
         cyl(f"glass{y}", (2.16, y, 0.56), 0.07, 0.02, m["lamp"], axis="X", verts=16)
-    block("vent", (-0.1, 0, 1.36), (0.3, 0.3, 0.05), m["black"], bevel=0.02)
     livery(m, body, cabin, -0.25, 1.35, -0.1, 0.52, number, sponsor, ink, bands)
     mirrors(m, 0.55, 0.8, 0.9)
     wheels(m, front, rear, 0.7, r, 0.24)
-    finish(name, 4.0)
+    finish(name, 4.0, 1.7, 1.35, body)
 
 
 os.makedirs(OUT, exist_ok=True)
 # Grid order (game's DRIVERS): Juno, Mika, Rook, Ayla, You, Vex. The sponsors are invented.
-porsche("car-0", 0x22252B, 0xD4A93A, 0x22252B, "1", "AURUM", 0xD4A93A)            # Juno: black and gold
+porsche("car-0", 0x22252B, 0xD4A93A, 0xF4F1EA, "1", "AURUM", 0xD4A93A)            # Juno: black and gold
 stratos("car-1", 0x7B45C8, 0xF4F1EA, 0xF4F1EA, "4", "NOVA", 0x22252B,
         bands=[(0.32, 0.4, 0xF2C230)])                                           # Mika: purple, white sweep
 escort("car-2", 0xF4F1EA, 0xE8742A, 0xF4F1EA, "22", "CASTELLO", 0x1F7A3A,
        bands=[(0.26, 0.34, 0xD83A2E), (0.36, 0.42, 0x1F7A3A)])                  # Rook: white, red/green/orange
-escort("car-3", 0x3FA7D6, 0xF4F1EA, 0x1E4F80, "9", "MARINA", 0x1E2A44,
+escort("car-3", 0x3FA7D6, 0xF4F1EA, 0xF4F1EA, "9", "MARINA", 0x1E2A44,
        bands=[(-0.42, -0.34, 0x1E4F80), (-0.32, -0.26, 0xD83A2E)])              # Ayla: Martini-ish blues and red
 porsche("car-4", 0xF2C230, 0x22252B, 0xF2C230, "7", "VELOX", 0x22252B,
         bands=[(-0.45, -0.38, 0xD83A2E), (0.38, 0.45, 0xD83A2E)])               # You: yellow, black and red

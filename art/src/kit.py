@@ -32,7 +32,7 @@ def link(obj):
     return obj
 
 
-def export(name):
+def export(name, colors=False):
     # One object per model: apply the bevels, then join every part.
     meshes = [o for o in bpy.context.scene.objects if o.type == "MESH"]
     for o in meshes:
@@ -56,7 +56,7 @@ def export(name):
         export_texcoords=True,
         export_normals=True,
         export_materials="EXPORT",
-        export_vertex_color="NONE",
+        export_vertex_color="ACTIVE" if colors else "NONE",
         export_animations=False,
         export_cameras=False,
         export_lights=False,

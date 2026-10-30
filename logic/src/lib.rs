@@ -146,6 +146,13 @@ fn name_of(id: u32) -> String {
     }
 }
 
+/// A tree's crown, so `present` can fade the ones standing between the camera and a car.
+#[derive(Clone, Copy, Debug, Default, Component)]
+pub struct Crown {
+    pub radius: f32,
+    pub height: f32,
+}
+
 pub struct KerbRacers;
 impl Game for KerbRacers {
     const ID: &'static str = "kerb-racers";
@@ -170,6 +177,8 @@ impl Game for KerbRacers {
         "stump.model",
         "rock.model",
         "fence.model",
+        "barrier.model",
+        "poppies.model",
         "asphalt.tex",
         "grass.tex",
         "clay.tex",
@@ -214,7 +223,7 @@ impl Game for KerbRacers {
             .expect("flowers");
         w.spawn_named("flowers", (Transform::default(), flowers, Ambient));
         for prop in scenery::props(w, &t, args.quality) {
-            w.spawn((
+            let e = w.spawn((
                 Transform {
                     position: Vec3::new(prop.at.x, 0.0, prop.at.y),
                     rotation: Quat::from_rotation_y(-prop.yaw),
@@ -228,6 +237,9 @@ impl Game for KerbRacers {
                 },
                 Ambient,
             ));
+            if let Some((radius, height)) = prop.crown {
+                w.insert(e, Crown { radius, height });
+            }
         }
         // Real-time sun shadows are the costliest thing on screen (Safari's
         // WebGPU above all), so below high quality the woods' shadows are baked
@@ -324,6 +336,41 @@ impl Game for KerbRacers {
     }
     fn paused(args: &Options) -> bool {
         args.paused
+    }
+    /// Trees between the camera and a car thin out (a dithered fade), so the
+    /// race is never hidden behind a crown.
+    fn present(p: &mut Present<'_>, _: &Options) {
+        let Some(cam) = p.named("camera").and_then(|e| p.global(e)) else {
+            return;
+        };
+        let eye = Vec3::from(cam.translation);
+        let mut cars = Vec::new();
+        p.for_each::<Car>(|e, _| {
+            if let Some(g) = p.global(e) {
+                cars.push(Vec3::from(g.translation) + Vec3::Y * 0.6);
+            }
+        });
+        let mut fade = Vec::new();
+        p.for_each::<Crown>(|e, crown| {
+            let Some(g) = p.global(e) else { return };
+            let at = Vec3::from(g.translation);
+            let hidden = cars.iter().any(|car| {
+                // Where the sight line from the eye to the car passes the trunk.
+                let d = *car - eye;
+                let flat = Vec2::new(d.x, d.z);
+                let s = (Vec2::new(at.x - eye.x, at.z - eye.z).dot(flat) / flat.length_squared())
+                    .clamp(0.0, 1.0);
+                let near = Vec2::new(eye.x + flat.x * s - at.x, eye.z + flat.y * s - at.z).length();
+                let y = eye.y + d.y * s;
+                near < crown.radius && y < crown.height
+            });
+            if hidden {
+                fade.push(e);
+            }
+        });
+        for e in fade {
+            p.insert(e, Opacity(0.28));
+        }
     }
     fn tick(w: &mut World, input: &Input, _: &Options) {
         let now = w.tick();
@@ -438,15 +485,15 @@ fn puffs(w: &mut World, car: Entity, name: &str) {
     for (suffix, birth, death, size) in [
         (
             "smoke",
-            [0.92, 0.92, 0.9, 0.5],
+            [0.9, 0.9, 0.88, 0.26],
             [0.85, 0.85, 0.85, 0.0],
-            [0.7, 2.6],
+            [0.45, 1.5],
         ),
         (
             "dust",
-            [0.62, 0.45, 0.28, 0.65],
+            [0.62, 0.45, 0.28, 0.42],
             [0.66, 0.55, 0.4, 0.0],
-            [0.8, 3.2],
+            [0.6, 2.2],
         ),
     ] {
         w.spawn_named(
@@ -455,8 +502,8 @@ fn puffs(w: &mut World, car: Entity, name: &str) {
                 Transform::at(-1.5, 0.25, 0.0),
                 Emitter {
                     shape: emitter::Shape::Sphere(0.35),
-                    rate: 22.0,
-                    lifetime: 1.3,
+                    rate: 18.0,
+                    lifetime: 0.85,
                     speed: 0.8,
                     spread: 1.3,
                     gravity: Vec3::new(0.0, 0.7, 0.0),
@@ -486,9 +533,10 @@ fn light(w: &mut World, quality: u32) {
         zenith: [0.22, 0.34, 0.55],
         horizon: [0.95, 0.72, 0.45],
         ground: [0.10, 0.09, 0.05],
-        ambient: 0.55,
+        // Moderate ambient and a stronger sky fill: soft shade, not black woods.
+        ambient: 0.5,
         sun_disc: 0.0,
-        exposure: 1.05,
+        exposure: 0.9,
         // The golden haze and bloom are full-screen passes: high quality only.
         fog: (quality >= 2).then_some(Fog {
             color: Some([0.95, 0.74, 0.48]),
@@ -500,13 +548,21 @@ fn light(w: &mut World, quality: u32) {
             radius: 2.0,
         }),
     });
+    // Contact shadows where trunks, fences, kerbs and cars meet the ground.
+    if quality >= 1 {
+        w.insert_resource(AmbientOcclusion {
+            radius: 1.2,
+            intensity: 0.9,
+            ..AmbientOcclusion::default()
+        });
+    }
     w.spawn_named(
         "sun",
         (
             Transform::at(-70.0, 24.0, -28.0).looking_at(Vec3::ZERO, Vec3::Y),
             DirectionalLight {
                 color: [1.0, 0.72, 0.45],
-                illuminance: 26000.0,
+                illuminance: 22000.0,
                 shadows: quality >= 2,
             },
         ),
@@ -518,7 +574,7 @@ fn light(w: &mut World, quality: u32) {
             Transform::at(40.0, 60.0, 30.0).looking_at(Vec3::ZERO, Vec3::Y),
             DirectionalLight {
                 color: [0.55, 0.68, 1.0],
-                illuminance: 2500.0,
+                illuminance: 3800.0,
                 shadows: false,
             },
         ),

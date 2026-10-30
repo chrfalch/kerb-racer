@@ -5,3 +5,4 @@
 /.shells/
 /app.contract.d.ts
 /.exact/
+__pycache__/
