@@ -15,6 +15,7 @@ if (import.meta.main) await proof(import.meta, async ({open, check, out, host, p
   if (process.argv.includes('--screenshot-only')) {
     check('screenshot uses web', host === 'web');
     await s.tap('play');
+    await s.tap('start');
     await s.world('world').run(3500);
     await s.world('world').hold('KeyW', 2500);
     await s.screenshot(resolve(out, 'game.png'));
@@ -30,6 +31,8 @@ if (import.meta.main) await proof(import.meta, async ({open, check, out, host, p
   if (host === 'web') await s.screenshot(resolve(out, 'menu.png'));
   await s.tap('play');
   const game = s.world('world');
+  check('the grid waits for a click to start', !!node(await s.tree(), 'start') && !node(await s.tree(), 'countdown'));
+  await s.tap('start');
   pin(0, await game.snapshot());
   check('countdown first, starting fifth', text(await s.tree(), 'hud-place') === '5/6' && !!node(await s.tree(), 'countdown'));
   const grid = await game.global_position('player');

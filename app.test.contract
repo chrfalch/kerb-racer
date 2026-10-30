@@ -5,6 +5,8 @@ test "Pick a track, race, and pause"
   tap "track-1"
   tap "play"
   expect tree has "world"
+  expect tree has "start"
+  tap "start"
   expect tree has "countdown"
   clock +4000
   expect text "hud-lap" == "1/3"
