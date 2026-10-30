@@ -3,10 +3,13 @@
 // as a real tilted lens does over a model railway; depth adds to it, so the
 // canopy rising toward the camera blurs even inside the band. Then a toy-like
 // grade and a soft vignette. Linear HDR in, linear HDR out, before
-// the engine's bloom and tone curve.
+// the engine's bloom and tone curve. The blur itself is gathered at half
+// resolution (lens_blur.wgsl); this pass fades to it by each pixel's own blur.
 @group(0) @binding(0) var scene: texture_2d<f32>;
 @group(0) @binding(1) var depth: texture_2d<f32>;
 @group(0) @binding(2) var<uniform> lens: Lens;
+@group(0) @binding(3) var blurred: texture_2d<f32>;
+@group(0) @binding(4) var bilinear: sampler;
 
 struct Lens {
     // View-space distance in focus, in metres.
@@ -57,22 +60,9 @@ fn coc(y: f32, d: f32) -> f32 {
     let r = coc(p.y, d);
     var color = textureLoad(scene, texel(p), 0).rgb;
     if (r > 0.5) {
-        // A golden-angle spiral of taps. A tap only counts as far as its own
-        // blur reaches, so a sharp road never smears into a blurred crown.
-        var sum = color;
-        var weight = 1.0;
-        let taps = 20;
-        for (var k = 1; k <= taps; k++) {
-            let f = f32(k) / f32(taps);
-            let a = f32(k) * 2.39996;
-            let o = vec2(cos(a), sin(a)) * sqrt(f) * r;
-            let q = texel(p + o);
-            let dq = textureLoad(depth, q, 0).r;
-            let w = smoothstep(0.0, 1.0, coc(p.y + o.y, dq) - length(o) + 1.0);
-            sum += textureLoad(scene, q, 0).rgb * w;
-            weight += w;
-        }
-        color = sum / weight;
+        let uv = p * 0.5 / vec2<f32>(textureDimensions(blurred));
+        let soft = textureSampleLevel(blurred, bilinear, uv, 0.0).rgb;
+        color = mix(color, soft, smoothstep(0.5, 2.0, r));
     }
     // A softer palette: ease saturation and contrast toward a mid grey, so the
     // greens and paints sit together instead of shouting.
