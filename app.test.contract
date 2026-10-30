@@ -8,5 +8,7 @@ test "Pick a track, race, and pause"
   expect tree has "countdown"
   clock +4000
   expect text "hud-lap" == "1/3"
+  expect tree has "radar"
+  expect tree has "radar-ahead"
   tap "pause"
   expect tree has "restart"

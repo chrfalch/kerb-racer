@@ -6,6 +6,20 @@ shape Row
   time: string
   you: bool
 
+shape Blip
+  id: number
+  at: string
+  fill: string
+  ring: string
+  you: bool
+
+shape Radar
+  view: string
+  road: string
+  blips: list<Blip>
+  ahead: string
+  behind: string
+
 shape Hud
   phase: string
   count: number
@@ -24,6 +38,7 @@ shape Hud
   sliding: bool
   off: bool
   standings: list<Row>
+  radar: Radar
 
 fn ordinal(n: number): string = n == 1 ? "1st" : n == 2 ? "2nd" : n == 3 ? "3rd" : `${n}th`
 
@@ -91,6 +106,18 @@ component KerbRacers
                 text `${hud.speed}` testId="hud-speed" font-size=32 font-weight=900 font-variant-numeric="tabular-nums"
                 text "km/h" font-size=11 color="#c9d6b8"
               text "GAS" testId="gas-light" padding=8 border-radius=10 font-weight=800 font-size=13 background-color=(hud.gas ? "#3fae5a" : "#33402f") color=(hud.gas ? "#ffffff" : "#8c9a86")
+          column testId="radar" position="absolute" right=16 bottom=18 align-items="center" gap=6 pointer-events="none"
+            when hud.radar.ahead != ""
+              text `▲ ${hud.radar.ahead}` testId="radar-ahead" padding-top=3 padding-bottom=3 padding-left=8 padding-right=8 border-radius=8 font-size=12 font-weight=700 font-variant-numeric="tabular-nums" background-color="#14201bcc"
+            column width=150 height=150 border-radius=75 overflow="hidden" background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
+              svg width=150 height=150 viewBox=hud.radar.view
+                polyline points=hud.radar.road fill="none" stroke="#fbf6e92e" stroke-width=9.2 stroke-linejoin="round" stroke-linecap="round"
+                polyline points=hud.radar.road fill="none" stroke="#fbf6e959" stroke-width=0.6 stroke-dasharray="3 3"
+                each b in hud.radar.blips key=b.id
+                  g transform=b.at
+                    polygon points=(b.you ? "4.6,0 -3.2,3 -1.6,0 -3.2,-3" : "3.8,0 -2.6,2.5 -1.3,0 -2.6,-2.5") fill=b.fill stroke=(b.you ? "#22252b" : b.ring) stroke-width=(b.you ? 1.1 : 0.8) stroke-linejoin="round"
+            when hud.radar.behind != ""
+              text `▼ ${hud.radar.behind}` testId="radar-behind" padding-top=3 padding-bottom=3 padding-left=8 padding-right=8 border-radius=8 font-size=12 font-weight=700 font-variant-numeric="tabular-nums" color="#c9d6b8" background-color="#14201bcc"
           when hud.phase == "grid"
             column testId="countdown" position="absolute" top=24 left=0 right=0 align-items="center" gap=8 pointer-events="none"
               text `${hud.count}` font-size=84 font-weight=900 color="#fbf6e9"
