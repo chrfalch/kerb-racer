@@ -619,7 +619,7 @@ fn puffs(w: &mut World, car: Entity, name: &str) {
 /// warm light on everything facing it, cool sky in the shade, a golden haze.
 fn light(w: &mut World, quality: u32) {
     w.insert_resource(Environment {
-        background: Some([0.42, 0.36, 0.22]),
+        background: Some([0.42, 0.36, 0.22].into()),
         zenith: [0.22, 0.34, 0.55],
         horizon: [0.95, 0.72, 0.45],
         ground: [0.10, 0.09, 0.05],
@@ -627,9 +627,10 @@ fn light(w: &mut World, quality: u32) {
         ambient: 0.5,
         sun_disc: 0.0,
         exposure: 0.9,
+        tone_mapping: ToneMapping::Aces,
         // The golden haze and bloom are full-screen passes: high quality only.
         fog: (quality >= 2).then_some(Fog {
-            color: Some([0.95, 0.74, 0.48]),
+            color: Some([0.95, 0.74, 0.48].into()),
             ..Fog::new(0.006, 0.12)
         }),
         bloom: (quality >= 2).then_some(Bloom {

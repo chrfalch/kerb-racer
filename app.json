@@ -1,6 +1,7 @@
 {
   "app": {
-    "name": "Kerb Racers"
+    "name": "Kerb Racers",
+    "id": "com.chrfalch.kerb-racers"
   },
   "game": {
     "assets": true,
