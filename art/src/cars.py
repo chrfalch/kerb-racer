@@ -31,6 +31,12 @@ def bump(x, centre, half):
     return 0.5 * (1 + math.cos(math.pi * d)) if d < 1 else 0.0
 
 
+def arch(x, centre):
+    """1 over a wheel, easing to 0 past it: where the body's underside lifts
+    clear so the whole tyre turns inside the wheel arch."""
+    return 1 - smooth_step(0.44, 0.62, abs(x - centre))
+
+
 def piecewise(points, x):
     """Smooth through (x, v) points, in any order, clamped at the ends."""
     points = sorted(points)
@@ -58,7 +64,7 @@ def section(hw, zb, zt, n, taper, ring):
     return pts
 
 
-def loft(name, x0, x1, shape, mat, stations=30, ring=24):
+def loft(name, x0, x1, shape, mat, stations=30, ring=24, under=None):
     """Stations from x0 to x1; shape(x) -> (half width, bottom z, top z, exponent, taper)."""
     # Remember the loft's length: decals draped over it end where it does.
     shape.span = (min(x0, x1), max(x0, x1))
@@ -81,12 +87,18 @@ def loft(name, x0, x1, shape, mat, stations=30, ring=24):
             j = (k + 1) % ring
             bm.faces.new([centre, r[j], r[k]] if flip else [centre, r[k], r[j]])
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    if under is not None:
+        # The underside, seen up inside the wheel arches, is dark like a real floor pan.
+        for f in bm.faces:
+            f.material_index = 1 if f.normal.z < -0.15 else 0
     me = bpy.data.meshes.new(name)
     bm.to_mesh(me)
     bm.free()
     for p in me.polygons:
         p.use_smooth = True
     me.materials.append(mat)
+    if under is not None:
+        me.materials.append(under)
     return link(bpy.data.objects.new(name, me))
 
 
@@ -219,7 +231,7 @@ def livery(m, body, cabin, roof_x, bonnet_x, door_x, door_z, number, sponsor, in
 
 
 def palette(paint, stripe, roof):
-    return dict(
+    m = dict(
         paint=material("paint", paint, rough=0.28, metal=0.1),
         stripe=material("stripe", stripe, rough=0.32),
         roof=material("roof", roof, rough=0.32),
@@ -231,10 +243,17 @@ def palette(paint, stripe, roof):
         lamp=material("lamp", 0xFFF4D0, rough=0.1, emit=0xFFE9B0),
         tail=material("tail", 0xB01018, rough=0.3, emit=0xFF2A20),
         black=material("black", 0x111214, rough=0.6),
+        # Floor pan and wheel wells: fully rough, so they never catch the sky.
+        well=material("well", 0x0E0F10, rough=1.0),
         white=material("white", 0xF4F1EA, rough=0.4),
     )
+    # One-sided: the wells' back plates must vanish when seen from behind,
+    # from across the car.
+    m["well"].use_backface_culling = True
+    return m
 
 
+# Side stripes, skirts and flaps keep to the flank between the wheel arches.
 def wheels(m, front, rear, track, radius, width, rim_style="disc"):
     """Remember where the wheels go: `finish` builds them after the squash."""
     WHEELS[:] = [(m, front, rear, track, rim_style)]
@@ -252,12 +271,8 @@ def wheel_model(name, rim_style, s):
     reset()
     m = palette(0x000000, 0x000000, 0x000000)
     radius, width = WHEEL, TYRE_WIDTH
-    # Tread blocks: a tyre has to show it turning.
-    cyl("tyre", (0, 0, 0), radius, width, m["tyre"], verts=16)
-    for k in range(8):
-        a = k * math.tau / 8
-        block(f"tread{k}", (math.cos(a) * radius, 0, math.sin(a) * radius), (0.05, width * 0.9, 0.03), m["hub"],
-              rot=(0, -a + math.pi / 2, 0))
+    # Faceted, so the tread shows it turning; the spokes show it too.
+    cyl("tyre", (0, 0, 0), radius, width, m["tyre"], verts=12)
     cyl("rim", (0, s * (width / 2 + 0.002), 0), radius * 0.66, 0.012, m["rim"], verts=14)
     cyl("hub", (0, s * (width / 2 + 0.008), 0), radius * 0.2, 0.012, m["hub"], verts=10)
     spokes = 5 if rim_style == "fuchs" else 4
@@ -274,14 +289,16 @@ def mirrors(m, x, y, z):
         block(f"mirror{s}", (x, s * y, z), (0.1, 0.12, 0.07), m["chrome"], bevel=0.02)
 
 
-def fender(m, x, y, width):
+def fender(m, x, y, width, skin):
     """A wheel arch: a thick curved lip in the body colour over the top of one
     wheel, clear of the tyre all round (tread included), so the turning tyre
     shows below it and never through it."""
     inner, outer = WHEEL + 0.06, WHEEL + 0.15
     s = 1 if y > 0 else -1
     # From inside the body out to just past the tyre's outer face.
-    y0, y1 = y - s * (width / 2 + 0.12), y + s * (width / 2 + 0.05)
+    # and past the body's own flank there (`skin`), so the arch is always the outermost surface.
+    y0 = y - s * (width / 2 + 0.1)
+    y1 = s * max(abs(y) + width / 2 + 0.05, skin + 0.03)
     spread = math.radians(78)
     steps = 14
     bm = bmesh.new()
@@ -293,14 +310,34 @@ def fender(m, x, y, width):
                       ((outer, y0), (outer, y1), (inner, y1), (inner, y0))])
     for a, b in zip(rings, rings[1:]):
         for j in range(4):
-            bm.faces.new([a[j], a[(j + 1) % 4], b[(j + 1) % 4], b[j]])
+            f = bm.faces.new([a[j], a[(j + 1) % 4], b[(j + 1) % 4], b[j]])
+            # The underside is the dark wheel well.
+            f.material_index = 1 if j == 2 else 0
     bm.faces.new(rings[0][::-1])
     bm.faces.new(rings[-1])
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    # The back of the well, seen past the tyre from outside: a dark wall just
+    # in front of the arch's inner end, facing out (the painted end still faces in).
+    yw = y0 + s * 0.01
+    wall = []
+    for k in range(steps + 1):
+        a = -spread + 2 * spread * k / steps
+        dx, dz = math.sin(a), math.cos(a)
+        wall.append([bm.verts.new((x + dx * r, yw, WHEEL + dz * r)) for r in (outer - 0.01, inner)])
+    # Down to the axle too: a dark back plate, so the eye never sees past the
+    # tyre, under the lifted floor, to the road on the far side of the car.
+    hub = bm.verts.new((x, yw, WHEEL * 0.35))
+    for a, b in zip(wall, wall[1:]):
+        for q in ([a[0], a[1], b[1], b[0]], [a[1], hub, b[1]]):
+            f = bm.faces.new(q)
+            if f.normal.y * s < 0:
+                f.normal_flip()
+            f.material_index = 1
     me = bpy.data.meshes.new("fender")
     bm.to_mesh(me)
     bm.free()
     me.materials.append(m["paint"])
+    me.materials.append(m["well"])
     # Round over the top, crisp at the flat lip and inner wall.
     for p in me.polygons:
         p.use_smooth = abs(p.normal.y) < 0.5
@@ -381,9 +418,26 @@ def finish(name, length, width, height, body):
     track = min(body(front)[0], body(rear)[0]) * sy - width_w / 2 - 0.03
     # The wheels are their own models (wheel_model); the game places them here.
     print(f"WHEELS {name} {rim_style} front={front * sx:.3f} rear={rear * sx:.3f} track={track:.3f} radius={WHEEL}")
-    for x in (front * sx, rear * sx):
+    # Whatever bodywork sits inside an arch (the flank's top, its underside)
+    # becomes the dark wheel well, so nothing pale shows between arch and tyre.
+    wells = [(x * sx, side * track) for x in (front, rear) for side in (-1, 1)]
+    for o in bpy.context.scene.objects:
+        if o.type != "MESH" or o.name.startswith("fender"):
+            continue
+        if "well" not in o.data.materials:
+            o.data.materials.append(m["well"])
+        well = list(o.data.materials).index(m["well"])
+        for p in o.data.polygons:
+            c = p.center
+            for wx, wy in wells:
+                inside = math.hypot(c.x - wx, c.z - WHEEL) < WHEEL + 0.08
+                if inside and abs(c.y) > abs(wy) - width_w / 2 - 0.02 and c.y * wy > 0:
+                    p.material_index = well
+    for x in (front, rear):
+        # The flank's half width over the whole wheel, after the squash.
+        skin = max(body(x + d)[0] for d in (-0.5, -0.25, 0.0, 0.25, 0.5)) * sy
         for side in (-1, 1):
-            fender(m, x, side * track, width_w)
+            fender(m, x * sx, side * track, width_w, skin)
     for o in bpy.context.scene.objects:
         if o.type == "MESH":
             # White everywhere: the colours multiply the materials; only the shadow fades.
@@ -408,9 +462,9 @@ def porsche(name, paint, stripe, roof, number, sponsor, ink, bands=()):
         hw *= (1 - smooth_step(1.75, 2.1, x) * 0.32) * (1 - smooth_step(-1.8, -2.1, x) * 0.22)
         zt = piecewise([(-2.08, 0.66), (-1.7, 0.82), (-1.1, 0.9), (0.6, 0.86), (1.25, 0.78), (2.08, 0.58)], x)
         # Front wings stand proud of the bonnet: the round headlamps sit in them.
-        zb = 0.24 + 0.40 * max(bump(x, front, 0.42), bump(x, rear, 0.42))
+        zb = 0.24 + 0.5 * max(arch(x, front), arch(x, rear))
         zb = max(zb, piecewise([(-2.1, 0.36), (-1.9, 0.24), (1.9, 0.24), (2.1, 0.34)], x))
-        return hw, zb, zt, 2.6, 0.96
+        return hw, min(zb, zt - 0.12), zt, 2.6, 0.96
 
     def cabin(x):
         # Fastback: the roof runs in one curve from the windscreen into the engine lid.
@@ -418,8 +472,8 @@ def porsche(name, paint, stripe, roof, number, sponsor, ink, bands=()):
         hw = piecewise([(0.62, 0.66), (0.0, 0.7), (-0.6, 0.7), (-1.75, 0.6)], x)
         return hw, 0.78, zt, 2.4, 0.72
 
-    loft("body", -2.08, 2.08, body, m["paint"])
-    loft("cabin", -1.75, 0.62, cabin, m["glass"])
+    loft("body", -2.08, 2.08, body, m["paint"], under=m["well"])
+    loft("cabin", -1.75, 0.62, cabin, m["glass"], under=m["well"])
     decal("roof", [cabin], -0.72, 0.1, -0.52, 0.52, m["roof"], lift=0.008)
     decal("lid", [body, cabin], -1.95, -1.05, -0.5, 0.5, m["paint"], lift=0.006)
     for y in (-0.16, 0.16):
@@ -432,7 +486,7 @@ def porsche(name, paint, stripe, roof, number, sponsor, ink, bands=()):
         cyl(f"ring{s}", (1.8, s * 0.56, 0.7), 0.125, 0.05, m["chrome"], axis="X", verts=18)
         block(f"tail{s}", (-2.06, s * 0.5, 0.7), (0.04, 0.32, 0.08), m["tail"])
         # A side stripe and a door roundel.
-        block(f"sidestripe{s}", (-0.2, s * 0.835, 0.5), (2.6, 0.01, 0.06), m["stripe"])
+        block(f"sidestripe{s}", (0.02, s * 0.835, 0.5), (1.0, 0.01, 0.06), m["stripe"])
         cyl(f"roundel{s}", (0.05, s * 0.84, 0.6), 0.16, 0.01, m["white"], verts=20)
     block("bumper-f", (2.05, 0, 0.38), (0.08, 1.3, 0.08), m["black"], bevel=0.02)
     block("bumper-r", (-2.08, 0, 0.42), (0.06, 1.3, 0.08), m["black"], bevel=0.02)
@@ -455,9 +509,9 @@ def stratos(name, paint, stripe, roof, number, sponsor, ink, bands=()):
         hw *= (1 - smooth_step(1.55, 1.86, x) * 0.25) * (1 - smooth_step(-1.6, -1.86, x) * 0.12)
         # The wedge: a sharp low nose rising straight to the screen.
         zt = piecewise([(-1.86, 0.84), (-0.5, 0.86), (0.35, 0.8), (1.86, 0.5)], x)
-        zb = 0.24 + 0.36 * max(bump(x, front, 0.42), bump(x, rear, 0.42))
+        zb = 0.24 + 0.5 * max(arch(x, front), arch(x, rear))
         zb = max(zb, piecewise([(-1.9, 0.32), (-1.7, 0.24), (1.6, 0.22), (1.86, 0.3)], x))
-        return hw, zb, zt, 3.0, 0.97
+        return hw, min(zb, zt - 0.12), zt, 3.0, 0.97
 
     def cabin(x):
         # The wraparound visor: a near-hemispherical screen and a short roof.
@@ -465,8 +519,8 @@ def stratos(name, paint, stripe, roof, number, sponsor, ink, bands=()):
         hw = piecewise([(0.62, 0.55), (0.1, 0.74), (-0.4, 0.74), (-0.75, 0.7)], x)
         return hw, 0.74, zt, 2.2, 0.8
 
-    loft("body", -1.86, 1.86, body, m["paint"])
-    loft("cabin", -0.75, 0.62, cabin, m["glass"])
+    loft("body", -1.86, 1.86, body, m["paint"], under=m["well"])
+    loft("cabin", -0.75, 0.62, cabin, m["glass"], under=m["well"])
     decal("roof", [cabin], -0.66, 0.05, -0.56, 0.56, m["roof"], lift=0.008)
     # Alitalia-style sweep: one broad and one thin band over the car.
     decal("band", [body, cabin], -1.84, 1.84, -0.3, 0.05, m["stripe"], lift=0.016, across=3)
@@ -481,7 +535,7 @@ def stratos(name, paint, stripe, roof, number, sponsor, ink, bands=()):
         block(f"strut{s}", (-1.78, s * 0.6, 0.88), (0.12, 0.04, 0.12), m["black"])
         cyl(f"tail{s}", (-1.86, s * 0.6, 0.66), 0.08, 0.03, m["tail"], axis="X", verts=14)
         cyl(f"roundel{s}", (0.0, s * 0.87, 0.55), 0.15, 0.01, m["white"], verts=20)
-        block(f"skirt{s}", (0, s * 0.85, 0.28), (1.4, 0.03, 0.06), m["black"])
+        block(f"skirt{s}", (0.02, s * 0.85, 0.28), (0.95, 0.03, 0.06), m["black"])
     # The rally light pod on the nose.
     block("pod", (1.12, 0, 0.72), (0.12, 0.9, 0.16), m["black"], bevel=0.03)
     for y in (-0.33, -0.11, 0.11, 0.33):
@@ -505,28 +559,28 @@ def escort(name, paint, stripe, roof, number, sponsor, ink, bands=()):
         hw *= (1 - smooth_step(1.8, 2.0, x) * 0.1) * (1 - smooth_step(-1.8, -2.0, x) * 0.08)
         # Three boxes: flat bonnet, upright cabin, flat boot.
         zt = piecewise([(-2.0, 0.84), (-1.2, 0.88), (0.7, 0.86), (1.75, 0.82), (2.0, 0.72)], x)
-        zb = 0.26 + 0.36 * max(bump(x, front, 0.4), bump(x, rear, 0.4))
+        zb = 0.26 + 0.48 * max(arch(x, front), arch(x, rear))
         zb = max(zb, piecewise([(-2.02, 0.34), (-1.85, 0.26), (1.85, 0.26), (2.02, 0.34)], x))
-        return hw, zb, zt, 4.5, 0.98
+        return hw, min(zb, zt - 0.12), zt, 4.5, 0.98
 
     def cabin(x):
         zt = piecewise([(0.78, 0.84), (0.3, 1.33), (-0.75, 1.35), (-1.25, 0.88)], x)
         hw = piecewise([(0.78, 0.7), (0.3, 0.7), (-0.75, 0.7), (-1.25, 0.7)], x)
         return hw, 0.8, zt, 3.6, 0.8
 
-    loft("body", -2.0, 2.0, body, m["paint"])
-    loft("cabin", -1.25, 0.78, cabin, m["glass"])
+    loft("body", -2.0, 2.0, body, m["paint"], under=m["well"])
+    loft("cabin", -1.25, 0.78, cabin, m["glass"], under=m["well"])
     decal("roof", [cabin], -0.85, 0.3, -0.56, 0.56, m["roof"], lift=0.008)
     # A single broad stripe over bonnet, roof and boot, and side flashes.
     decal("stripe", [body, cabin], -1.98, 1.98, -0.22, 0.22, m["stripe"], lift=0.016, across=3)
     for s in (-1, 1):
-        block(f"flash{s}", (0.1, s * 0.84, 0.62), (2.8, 0.01, 0.1), m["stripe"])
+        block(f"flash{s}", (0.02, s * 0.84, 0.62), (1.05, 0.01, 0.1), m["stripe"])
         cyl(f"roundel{s}", (-0.1, s * 0.845, 0.52), 0.15, 0.01, m["white"], verts=20)
         # Twin round headlamps per side in a black grille.
         for y in (0.28, 0.55):
             cyl(f"lamp{s}{y}", (2.0, s * y, 0.66), 0.08, 0.04, m["lamp"], axis="X", verts=16)
         block(f"tail{s}", (-2.0, s * 0.55, 0.68), (0.04, 0.22, 0.12), m["tail"])
-        block(f"flap{s}", (-1.55, s * 0.78, 0.18), (0.02, 0.2, 0.22), m["black"])
+        block(f"flap{s}", (-1.8, s * 0.78, 0.18), (0.02, 0.2, 0.22), m["black"])
     block("grille", (2.0, 0, 0.62), (0.04, 0.9, 0.16), m["black"])
     block("bumper-f", (2.04, 0, 0.42), (0.06, 1.5, 0.06), m["chrome"], bevel=0.02)
     block("bumper-r", (-2.03, 0, 0.44), (0.06, 1.5, 0.06), m["chrome"], bevel=0.02)
