@@ -158,3 +158,4 @@ component KerbRacers
             text "Right click: gas · Left click: brake" font-weight=700
             text "Steering is automatic. Full speed into a corner and you will slide off." font-size=14 color="#c9d6b8" text-align="center"
             text "On touch: right half is gas, left half is brake." font-size=13 color="#8c9a86"
+            text "High graphics turns on real-time shadows: smooth in Chrome, heavy in Safari." font-size=12 color="#8c9a86"

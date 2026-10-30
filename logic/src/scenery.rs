@@ -1,7 +1,7 @@
 //! Generated geometry: the textured ground and road with its kerbs and lines,
 //! flowers, the player's marker, and where the Blender models stand.
 use crate::track::{Track, HALF, RUNOFF, WALL};
-use exact_game::asset::{MaterialData, MeshData, Model, Node};
+use exact_game::asset::{AlphaMode, MaterialData, MeshData, Model, Node};
 use exact_game::*;
 
 /// sRGB hex to linear RGBA.
@@ -443,8 +443,9 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
         placed.iter().all(|(q, s)| (*q - p).length() >= r + s)
     };
     // Woods: conifers crowd up to the fences, the odd broadleaf among them.
-    // Low quality keeps the fences and a thinner wood, and skips the undergrowth.
-    let (trees, undergrowth) = if quality == 0 { (700, 0) } else { (1800, 1400) };
+    // Every quality has the same woods, so one baked shadow overlay fits them all;
+    // low quality skips the undergrowth.
+    let (trees, undergrowth) = (1800, if quality == 0 { 0 } else { 1400 });
     for _ in 0..trees {
         let p = Vec2::new(w.rand(cx - 95.0..cx + 95.0), w.rand(cz - 82.0..cz + 82.0));
         let clear = clearance(t, p);
@@ -541,4 +542,73 @@ pub fn marker() -> MeshData {
     b.pyramid(Vec3::new(0.0, 0.0, 0.0), 0.0, 0.8, 0.45, hex(0xfff1a8));
     b.pyramid(Vec3::new(0.0, 0.8, 0.0), 0.45, 0.01, 0.0, hex(0xfff1a8));
     b.finish()
+}
+
+/// Where the ground (and the baked shade over it) lies: its centre and full size.
+pub fn ground_rect(t: &Track) -> (Vec2, Vec2) {
+    let (cx, cz) = centre_of(t);
+    (Vec2::new(cx, cz), Vec2::new(48.0 * 4.0, 42.0 * 4.0))
+}
+
+/// The baked shade: one alpha-blended quad over the whole ground carrying the
+/// trees' and fences' low-sun shadows, painted offline by art/src/shade.py.
+pub fn shade_overlay(t: &Track) -> Model {
+    let (c, size) = ground_rect(t);
+    let mut b = Builder::new();
+    let (x0, z0) = (c.x - size.x / 2.0, c.y - size.y / 2.0);
+    let (x1, z1) = (c.x + size.x / 2.0, c.y + size.y / 2.0);
+    b.quad_uv(
+        [
+            Vec3::new(x0, 0.09, z0),
+            Vec3::new(x1, 0.09, z0),
+            Vec3::new(x1, 0.09, z1),
+            Vec3::new(x0, 0.09, z1),
+        ],
+        // Image rows run north to south: v grows with z.
+        [
+            Vec2::new(0., 0.),
+            Vec2::new(1., 0.),
+            Vec2::new(1., 1.),
+            Vec2::new(0., 1.),
+        ],
+        [1.0; 4],
+    );
+    let texture = format!("shade-{}.tex", t.id);
+    model(
+        vec![b.finish()],
+        vec![MaterialData {
+            alpha_mode: AlphaMode::Blend,
+            ..textured_material(0, 1.0)
+        }],
+        &[texture.as_str()],
+    )
+}
+
+/// A soft dark patch under a car, stretched away from the sun.
+pub fn blob() -> Model {
+    let mut b = Builder::new();
+    let (hx, hz) = (2.3, 1.25);
+    b.quad_uv(
+        [
+            Vec3::new(-hx, 0.0, -hz),
+            Vec3::new(hx, 0.0, -hz),
+            Vec3::new(hx, 0.0, hz),
+            Vec3::new(-hx, 0.0, hz),
+        ],
+        [
+            Vec2::new(0., 0.),
+            Vec2::new(1., 0.),
+            Vec2::new(1., 1.),
+            Vec2::new(0., 1.),
+        ],
+        [1.0; 4],
+    );
+    model(
+        vec![b.finish()],
+        vec![MaterialData {
+            alpha_mode: AlphaMode::Blend,
+            ..textured_material(0, 1.0)
+        }],
+        &["blob.tex"],
+    )
 }

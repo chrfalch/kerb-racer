@@ -158,3 +158,59 @@ fn scenery_budget() {
         assert!(trees < 300, "{trees} trees on track {id}");
     }
 }
+
+/// The woods as art/src/shade.py reads them: every tree, bush and fence section
+/// that casts a baked shadow, in setup's order.
+fn casters(game: &Sim<KerbRacers>) -> String {
+    let w = game.world();
+    let (centre, size) = kerb_racers_logic::scenery::ground_rect(&w.resource::<Track>());
+    let mut out = format!(
+        "[\n  {{\"kind\": \"ground\", \"x\": {:.3}, \"z\": {:.3}, \"w\": {:.3}, \"h\": {:.3}}},\n",
+        centre.x, centre.y, size.x, size.y
+    );
+    for (_, (pose, mesh)) in w
+        .query::<(&exact_game::Transform, &exact_game::Mesh)>()
+        .iter()
+    {
+        let exact_game::Mesh::Asset(name) = mesh else {
+            continue;
+        };
+        let kind = name.trim_end_matches(".model");
+        if !["pine-a", "pine-b", "pine-c", "tree-a", "bush", "fence"].contains(&kind) {
+            continue;
+        }
+        let along = pose.rotation * exact_game::Vec3::X * pose.scale.x;
+        out += &format!(
+            "  {{\"kind\": \"{kind}\", \"x\": {:.3}, \"z\": {:.3}, \"scale\": {:.3}, \"dx\": {:.3}, \"dz\": {:.3}}},\n",
+            pose.position.x, pose.position.z, pose.scale.y, along.x, along.z
+        );
+    }
+    out.truncate(out.len() - 2);
+    out + "\n]\n"
+}
+
+#[test]
+fn baked_shade_matches_the_woods() {
+    // KR_REBAKE=1 rewrites the lists; then run `blender -b -P art/src/shade.py`.
+    for id in 0..3 {
+        // Setup places the woods before any asset arrives: no delivery needed.
+        let game = Sim::<KerbRacers>::new(Options {
+            track: id,
+            ..Options::default()
+        })
+        .unwrap();
+        let path = format!(
+            "{}/../../art/src/casters-{id}.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let now = casters(&game);
+        if std::env::var("KR_REBAKE").is_ok() {
+            std::fs::write(&path, &now).unwrap();
+        }
+        let baked = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            baked == now,
+            "track {id}'s woods moved: rebake its shade (KR_REBAKE=1, then art/src/shade.py)"
+        );
+    }
+}
