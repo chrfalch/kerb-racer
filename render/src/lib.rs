@@ -75,26 +75,41 @@ impl Hooks for Lens {
         let uniform = self.uniform.get_or_insert_with(|| {
             gpu.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("lens"),
-                size: 32,
+                size: 48,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
         });
-        // Focus on the player's car: its distance along the camera's view axis.
-        let focus = match (world.named("camera"), world.named("player")) {
-            (Some(cam), Some(car)) => match (view.pose(cam).or(world.global(cam)), world.global(car)) {
-                (Some(cam), Some(car)) => {
-                    let eye = cam.w_axis.truncate();
-                    let forward = -cam.z_axis.truncate().normalize_or_zero();
-                    (car.w_axis.truncate() + Vec3::Y * 0.5 - eye).dot(forward)
-                }
-                _ => 41.0,
-            },
-            _ => 41.0,
+        // Focus on the player's car: its distance along the camera's view axis,
+        // and the screen row it sits on, where the sharp band centres.
+        let car = world
+            .named("player")
+            .and_then(|car| view.pose(car).or(world.global(car)))
+            .map(|car| car.w_axis.truncate() + Vec3::Y * 0.5);
+        let (focus, band) = match car {
+            Some(car) => {
+                let seen = view.frame.view.transform_point3(car);
+                let clip = view.frame.proj.project_point3(seen);
+                (-seen.z, (0.5 - clip.y * 0.5).clamp(0.2, 0.8))
+            }
+            None => (41.0, 0.5),
         };
         let (w, h) = (view.pixels.0 as f32, view.pixels.1 as f32);
         // The blur scales with the picture, so every size looks the same.
-        let words = [focus, 5.0, 14.0, h * 0.009, w, h, 0.32, 0.05];
+        let words = [
+            focus,
+            5.0,
+            14.0,
+            h * 0.016,
+            w,
+            h,
+            0.36,
+            0.05,
+            band,
+            0.09,
+            0.28,
+            1.0,
+        ];
         gpu.queue
             .write_buffer(uniform, 0, &words.map(f32::to_le_bytes).concat());
         self.device = Some(gpu.device.clone());
