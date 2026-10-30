@@ -204,8 +204,10 @@ pub struct KerbRacers;
 impl Game for KerbRacers {
     const ID: &'static str = "kerb-racers";
     const HZ: u32 = 120;
-    /// The Blender models and ground textures: shown as they land, never read by the simulation.
-    const STREAMED: &'static [&'static str] = &[
+    /// The Blender models and ground textures. Setup waits for them, so the race
+    /// (and its countdown) only begins once the whole track can be drawn; the
+    /// loading screen in app.contract covers the wait.
+    const ASSETS: &'static [&'static str] = &[
         "car-0.model",
         "car-1.model",
         "car-2.model",
