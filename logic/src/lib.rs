@@ -606,6 +606,12 @@ fn light(w: &mut World, quality: u32) {
             radius: 2.0,
         }),
     });
+    // Fewer pixels than a Retina display's: the tilt-shift blur covers most of
+    // the screen and the HUD stays sharp (it is not the canvas), while the
+    // frame's cost scales with its pixels (PERF.md).
+    w.insert_resource(RenderScale {
+        max_pixel_ratio: [1.25, 1.5, 1.75][quality as usize],
+    });
     // Contact shadows where trunks, fences, kerbs and cars meet the ground.
     if quality >= 1 {
         w.insert_resource(AmbientOcclusion {
