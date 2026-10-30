@@ -296,7 +296,10 @@ pub fn road(t: &Track) -> Model {
         let d = (lat - t.line[i]) / 1.6;
         let rubber = 0.22 * math::exp(-d * d);
         let edge = 0.08 * ((lat.abs() - (HALF - 1.0)) / 1.0).clamp(0.0, 1.0);
-        shade([1.0; 4], (0.98 + 0.05 * noise(i as i32 / 6, 1, 5)) * (1.0 - rubber) + edge)
+        shade(
+            [1.0; 4],
+            (0.98 + 0.05 * noise(i as i32 / 6, 1, 5)) * (1.0 - rubber) + edge,
+        )
     });
     let mut verge = Builder::new();
     for side in [-1.0f32, 1.0] {
@@ -497,7 +500,11 @@ pub fn ground(t: &Track) -> Model {
                 Vec3::new(xa, 0., za + cell),
             ];
             let uv = q.map(|p| Vec2::new(p.x / tile, p.z / tile));
-            b.quad_uvc(q, uv, [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)]);
+            b.quad_uvc(
+                q,
+                uv,
+                [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)],
+            );
         }
     }
     model(
@@ -619,8 +626,9 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
         placed.iter().all(|(q, s)| (*q - p).length() >= r + s)
     };
     // Woods: conifers crowd up to the fences, the odd broadleaf among them.
-    // Low quality keeps the fences and a thinner wood, and skips the undergrowth.
-    let (trees, undergrowth) = if quality == 0 { (700, 0) } else { (1800, 1400) };
+    // Every quality has the same woods, so one baked shadow overlay fits them all;
+    // low quality skips the undergrowth.
+    let (trees, undergrowth) = (1800, if quality == 0 { 0 } else { 1400 });
     for _ in 0..trees {
         let p = Vec2::new(w.rand(cx - 95.0..cx + 95.0), w.rand(cz - 82.0..cz + 82.0));
         let clear = clearance(t, p);
@@ -651,7 +659,12 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
         };
         out.push(Prop {
             crown: Some((radius * scale * 1.15, height * scale)),
-            ..Prop::new(model, p, w.rand(0.0..std::f32::consts::TAU), Vec3::splat(scale))
+            ..Prop::new(
+                model,
+                p,
+                w.rand(0.0..std::f32::consts::TAU),
+                Vec3::splat(scale),
+            )
         });
         // Toadstools at the foot of the odd tree.
         if undergrowth > 0 && w.chance(0.12) {
@@ -727,7 +740,14 @@ pub fn flowers(w: &World, t: &Track) -> MeshData {
             if clearance(t, p) < HALF + RUNOFF + 0.8 {
                 continue;
             }
-            blossom(&mut b, p, w.rand(0.11..0.17), w.rand(0.0..1.0), petal, heart);
+            blossom(
+                &mut b,
+                p,
+                w.rand(0.11..0.17),
+                w.rand(0.0..1.0),
+                petal,
+                heart,
+            );
         }
     }
     b.finish()
@@ -746,12 +766,23 @@ fn blossom(b: &mut Builder, p: Vec2, r: f32, turn: f32, petal: [f32; 4], heart: 
         let a = turn * tau + k as f32 / petals as f32 * tau;
         let w = tau / petals as f32 * 0.42;
         // A kite: narrow at the heart, round at the tip.
-        b.quad_up(at(a, r * 0.25, y), at(a - w, r * 0.75, y), at(a, r, y), at(a + w, r * 0.75, y), petal);
+        b.quad_up(
+            at(a, r * 0.25, y),
+            at(a - w, r * 0.75, y),
+            at(a, r, y),
+            at(a + w, r * 0.75, y),
+            petal,
+        );
     }
     for k in 0..6 {
         let a = k as f32 / 6.0 * tau;
         let a2 = (k + 1) as f32 / 6.0 * tau;
-        b.tri(at(0.0, 0.0, y + 0.02), at(a, r * 0.3, y + 0.01), at(a2, r * 0.3, y + 0.01), heart);
+        b.tri(
+            at(0.0, 0.0, y + 0.02),
+            at(a, r * 0.3, y + 0.01),
+            at(a2, r * 0.3, y + 0.01),
+            heart,
+        );
     }
 }
 
@@ -761,4 +792,73 @@ pub fn marker() -> MeshData {
     b.pyramid(Vec3::new(0.0, 0.0, 0.0), 0.0, 0.8, 0.45, hex(0xfff1a8));
     b.pyramid(Vec3::new(0.0, 0.8, 0.0), 0.45, 0.01, 0.0, hex(0xfff1a8));
     b.finish()
+}
+
+/// Where the ground (and the baked shade over it) lies: its centre and full size.
+pub fn ground_rect(t: &Track) -> (Vec2, Vec2) {
+    let (cx, cz) = centre_of(t);
+    (Vec2::new(cx, cz), Vec2::new(48.0 * 4.0, 42.0 * 4.0))
+}
+
+/// The baked shade: one alpha-blended quad over the whole ground carrying the
+/// trees' and fences' low-sun shadows, painted offline by art/src/shade.py.
+pub fn shade_overlay(t: &Track) -> Model {
+    let (c, size) = ground_rect(t);
+    let mut b = Builder::new();
+    let (x0, z0) = (c.x - size.x / 2.0, c.y - size.y / 2.0);
+    let (x1, z1) = (c.x + size.x / 2.0, c.y + size.y / 2.0);
+    b.quad_uv(
+        [
+            Vec3::new(x0, 0.09, z0),
+            Vec3::new(x1, 0.09, z0),
+            Vec3::new(x1, 0.09, z1),
+            Vec3::new(x0, 0.09, z1),
+        ],
+        // Image rows run north to south: v grows with z.
+        [
+            Vec2::new(0., 0.),
+            Vec2::new(1., 0.),
+            Vec2::new(1., 1.),
+            Vec2::new(0., 1.),
+        ],
+        [1.0; 4],
+    );
+    let texture = format!("shade-{}.tex", t.id);
+    model(
+        vec![b.finish()],
+        vec![MaterialData {
+            alpha_mode: AlphaMode::Blend,
+            ..textured_material(0, 1.0)
+        }],
+        &[texture.as_str()],
+    )
+}
+
+/// A soft dark patch under a car, stretched away from the sun.
+pub fn blob() -> Model {
+    let mut b = Builder::new();
+    let (hx, hz) = (2.3, 1.25);
+    b.quad_uv(
+        [
+            Vec3::new(-hx, 0.0, -hz),
+            Vec3::new(hx, 0.0, -hz),
+            Vec3::new(hx, 0.0, hz),
+            Vec3::new(-hx, 0.0, hz),
+        ],
+        [
+            Vec2::new(0., 0.),
+            Vec2::new(1., 0.),
+            Vec2::new(1., 1.),
+            Vec2::new(0., 1.),
+        ],
+        [1.0; 4],
+    );
+    model(
+        vec![b.finish()],
+        vec![MaterialData {
+            alpha_mode: AlphaMode::Blend,
+            ..textured_material(0, 1.0)
+        }],
+        &["blob.tex"],
+    )
 }

@@ -15,7 +15,7 @@ pub struct Options {
     /// Which circuit: 0 Pine Hollow, 1 Fern Loop, 2 Kerb Ring.
     pub track: u32,
     pub laps: u32,
-    /// Graphics: 0 low (no shadows, fewer props), 1 medium (sun shadows), 2 high (haze and bloom too).
+    /// Graphics: 0 low (no undergrowth), 1 medium (baked shadows, the default), 2 high (real-time sun shadows, haze and bloom).
     pub quality: u32,
     #[live]
     pub paused: bool,
@@ -34,6 +34,9 @@ impl Default for Options {
         }
     }
 }
+
+/// Where a car's blob shadow falls from its centre: away from the low western sun.
+pub const SHADOW_OFFSET: Vec2 = Vec2::new(1.1, 0.45);
 
 /// Seconds of countdown before the lights go out.
 pub const COUNTDOWN: f32 = 3.0;
@@ -200,6 +203,10 @@ impl Game for KerbRacers {
         "asphalt.tex",
         "grass.tex",
         "clay.tex",
+        "blob.tex",
+        "shade-0.tex",
+        "shade-1.tex",
+        "shade-2.tex",
     ];
     type Args = Options;
     fn actions() -> Actions {
@@ -255,6 +262,19 @@ impl Game for KerbRacers {
                 w.insert(e, Crown { radius, height });
             }
         }
+        // Real-time sun shadows are the costliest thing on screen (Safari's
+        // WebGPU above all), so below high quality the woods' shadows are baked
+        // into an overlay and each car carries a soft blob instead.
+        let baked = args.quality < 2;
+        if baked {
+            let shade = w
+                .generated_model(&format!("shade-{id}.model"), scenery::shade_overlay(&t))
+                .expect("shade");
+            w.spawn_named("shade", (Transform::default(), shade, Ambient));
+        }
+        let blob = w
+            .generated_model("blob.model", scenery::blob())
+            .expect("blob");
         for (k, d) in DRIVERS.iter().enumerate() {
             let k = k as u32;
             let row = k / 2;
@@ -299,6 +319,15 @@ impl Game for KerbRacers {
                     ));
                 }
             }
+            w.spawn_named(
+                format!("{}-shadow", name_of(k)),
+                (
+                    Transform::at(p.x + SHADOW_OFFSET.x, 0.1, p.y + SHADOW_OFFSET.y),
+                    blob.clone(),
+                    Visible(baked),
+                    Ambient,
+                ),
+            );
             if k == PLAYER {
                 let marker = w
                     .generated("marker.model", scenery::marker())
@@ -467,6 +496,11 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
         drop(pose);
         let speed = Vec2::new(body.car.vx, body.car.vz).length();
         let name = name_of(body.car.id);
+        *w.require_mut::<Transform>(format!("{name}-shadow").as_str()) = Transform {
+            position: Vec3::new(body.p.x + SHADOW_OFFSET.x, 0.1, body.p.y + SHADOW_OFFSET.y),
+            rotation: Quat::from_rotation_y(-body.car.heading),
+            scale: Vec3::ONE,
+        };
         let smoke = body.car.sliding && body.car.surface != car::GRASS && speed > 5.0;
         let dust = body.car.surface != car::ASPHALT && speed > 3.0;
         for (suffix, on) in [("smoke", smoke), ("dust", dust)] {
@@ -587,7 +621,7 @@ fn light(w: &mut World, quality: u32) {
             DirectionalLight {
                 color: [1.0, 0.72, 0.45],
                 illuminance: 22000.0,
-                shadows: quality >= 1,
+                shadows: quality >= 2,
             },
         ),
     );
