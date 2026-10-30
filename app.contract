@@ -1,0 +1,148 @@
+shape Row
+  id: number
+  place: number
+  name: string
+  color: string
+  time: string
+  you: bool
+
+shape Hud
+  phase: string
+  count: number
+  go: bool
+  track: string
+  lap: number
+  laps: number
+  place: number
+  cars: number
+  time: string
+  best: string
+  last: string
+  speed: number
+  gas: bool
+  brake: bool
+  sliding: bool
+  off: bool
+  standings: list<Row>
+
+fn ordinal(n: number): string = n == 1 ? "1st" : n == 2 ? "2nd" : n == 3 ? "3rd" : `${n}th`
+
+component KerbRacers
+  state playing = false
+  state track = 0
+  state again = false
+  state paused = false
+  resource hud = exactSurface("world") as shape Hud
+
+  action pick(n: number)
+    track = n
+
+  action play
+    paused = false
+    playing = true
+
+  action togglePause
+    paused = not paused
+
+  action restart
+    again = not again
+    paused = false
+
+  action menu
+    playing = false
+    paused = false
+
+  view
+    main width="100%" height="100%" background-color="#1d2b1a" color="#fbf6e9" font-family="system-ui"
+      when playing
+        canvas surface=world(seed=7, track=track, laps=3, paused=paused, restart=again) testId="world" width="100%" height="100%" position="relative" user-select="none"
+          row testId="hud-top" position="absolute" top=16 left=16 gap=10 pointer-events="none"
+            column padding=12 border-radius=14 background-color="#14201bcc" align-items="center" min-width=74
+              text "POS" font-size=11 font-weight=700 letter-spacing=2 color="#c9d6b8"
+              text `${hud.place}/${hud.cars}` testId="hud-place" font-size=30 font-weight=900
+            column padding=12 border-radius=14 background-color="#14201bcc" align-items="center" min-width=74
+              text "LAP" font-size=11 font-weight=700 letter-spacing=2 color="#c9d6b8"
+              text `${hud.lap}/${hud.laps}` testId="hud-lap" font-size=30 font-weight=900
+            column padding=12 border-radius=14 background-color="#14201bcc" gap=2 min-width=120
+              text hud.time testId="hud-time" font-size=24 font-weight=800 font-variant-numeric="tabular-nums"
+              text `Best ${hud.best}` testId="hud-best" font-size=12 color="#c9d6b8"
+          column testId="standings" position="absolute" top=104 left=16 gap=4 pointer-events="none"
+            each r in hud.standings key=r.id
+              row gap=8 align-items="center" padding-top=4 padding-bottom=4 padding-left=8 padding-right=10 border-radius=8 background-color=(r.you ? "#f2c230e6" : "#14201bb3")
+                text `${r.place}` width=14 font-weight=800 color=(r.you ? "#22252b" : "#fbf6e9")
+                column width=10 height=10 border-radius=5 background-color=r.color border-width=1 border-color="#00000055"
+                text r.name width=40 font-weight=700 color=(r.you ? "#22252b" : "#fbf6e9")
+                text r.time font-size=12 color=(r.you ? "#22252b" : "#c9d6b8")
+          button press=togglePause testId="pause" aria-label=(paused ? "Resume" : "Pause") position="absolute" top=16 right=16 padding=12 border-radius=12 background-color="#14201bcc"
+            text (paused ? "Resume" : "Pause")
+          column position="absolute" left=0 right=0 bottom=18 align-items="center" gap=8 pointer-events="none"
+            when hud.off
+              text "OFF TRACK" testId="off-track" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#a4472fe6"
+            else
+              when hud.sliding
+                text "SLIDING" testId="sliding" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#e8742ae6"
+            row gap=10 align-items="center" padding=10 border-radius=16 background-color="#14201bcc"
+              text "BRAKE" testId="brake-light" padding=8 border-radius=10 font-weight=800 font-size=13 background-color=(hud.brake ? "#d83a2e" : "#33402f") color=(hud.brake ? "#ffffff" : "#8c9a86")
+              column align-items="center" min-width=92
+                text `${hud.speed}` testId="hud-speed" font-size=32 font-weight=900 font-variant-numeric="tabular-nums"
+                text "km/h" font-size=11 color="#c9d6b8"
+              text "GAS" testId="gas-light" padding=8 border-radius=10 font-weight=800 font-size=13 background-color=(hud.gas ? "#3fae5a" : "#33402f") color=(hud.gas ? "#ffffff" : "#8c9a86")
+          when hud.phase == "grid"
+            column testId="countdown" position="absolute" top=24 left=0 right=0 align-items="center" gap=8 pointer-events="none"
+              text `${hud.count}` font-size=84 font-weight=900 color="#fbf6e9"
+              text hud.track font-size=20 font-weight=700 color="#f2c230"
+              text "Right click: gas · Left click: brake" padding=10 border-radius=12 background-color="#14201bcc"
+              text "Steering is automatic. Too fast into a corner and you'll slide off." font-size=14 color="#c9d6b8"
+          when hud.go
+            column testId="go" position="absolute" top=24 left=0 right=0 align-items="center" pointer-events="none"
+              text "GO!" font-size=84 font-weight=900 color="#3fae5a"
+          when hud.phase == "done"
+            column testId="results" position="absolute" inset=0 align-items="center" justify-content="center" background-color="#0f1a12b3"
+              column padding=24 gap=14 border-radius=20 background-color="#1d2b1af2" min-width=300 align-items="center"
+                text (hud.place == 1 ? "You win!" : `You finished ${ordinal(hud.place)}`) testId="result-title" font-size=34 font-weight=900 color=(hud.place == 1 ? "#f2c230" : "#fbf6e9")
+                text `${hud.track} · ${hud.time} · best lap ${hud.best}` font-size=14 color="#c9d6b8"
+                column gap=6 width="100%"
+                  each r in hud.standings key=r.id
+                    row gap=10 align-items="center" padding=8 border-radius=10 background-color=(r.you ? "#f2c230" : "#14201b")
+                      text `${r.place}` width=18 font-weight=900 color=(r.you ? "#22252b" : "#fbf6e9")
+                      column width=12 height=12 border-radius=6 background-color=r.color border-width=1 border-color="#00000055"
+                      text r.name flex-grow=1 font-weight=700 color=(r.you ? "#22252b" : "#fbf6e9")
+                      text r.time font-variant-numeric="tabular-nums" color=(r.you ? "#22252b" : "#c9d6b8")
+                row gap=12
+                  button press=restart autofocus testId="again" aria-label="Race again" padding=14 border-radius=12 background-color="#f2c230"
+                    text "Race again" font-weight=800 color="#22252b"
+                  button press=menu testId="menu" aria-label="Menu" padding=14 border-radius=12 background-color="#33402f"
+                    text "Menu" font-weight=700
+          when paused
+            column testId="paused" position="absolute" inset=0 align-items="center" justify-content="center" gap=14 background-color="#0f1a12cc"
+              text "Paused" font-size=40 font-weight=900
+              button press=togglePause testId="resume" aria-label="Resume race" padding=14 border-radius=12 background-color="#f2c230"
+                text "Resume" font-weight=800 color="#22252b"
+              button press=restart testId="restart" aria-label="Restart" padding=12 border-radius=12 background-color="#33402f"
+                text "Restart"
+              button press=menu testId="quit" aria-label="Quit to menu" padding=12 border-radius=12 background-color="#33402f"
+                text "Menu"
+      else
+        column width="100%" height="100%" box-sizing="border-box" padding=24 align-items="center" justify-content="center" gap=26 background-color="#1d2b1a"
+          column align-items="center" gap=6
+            text "KERB RACERS" font-size=56 font-weight=900 letter-spacing=4 color="#f2c230"
+            text "Short tracks. Six cars. Two pedals." font-size=18 color="#c9d6b8"
+          row gap=14 flex-wrap="wrap" justify-content="center"
+            button press=pick(0) testId="track-0" aria-label="Pine Hollow" padding=16 border-radius=14 min-width=150 background-color=(track == 0 ? "#f2c230" : "#2c3d27")
+              column gap=4 align-items="center"
+                text "Pine Hollow" font-weight=800 color=(track == 0 ? "#22252b" : "#fbf6e9")
+                text "S-bends in the pines" font-size=12 color=(track == 0 ? "#22252b" : "#c9d6b8")
+            button press=pick(1) testId="track-1" aria-label="Fern Loop" padding=16 border-radius=14 min-width=150 background-color=(track == 1 ? "#f2c230" : "#2c3d27")
+              column gap=4 align-items="center"
+                text "Fern Loop" font-weight=800 color=(track == 1 ? "#22252b" : "#fbf6e9")
+                text "Fast and flowing" font-size=12 color=(track == 1 ? "#22252b" : "#c9d6b8")
+            button press=pick(2) testId="track-2" aria-label="Kerb Ring" padding=16 border-radius=14 min-width=150 background-color=(track == 2 ? "#f2c230" : "#2c3d27")
+              column gap=4 align-items="center"
+                text "Kerb Ring" font-weight=800 color=(track == 2 ? "#22252b" : "#fbf6e9")
+                text "Tight and technical" font-size=12 color=(track == 2 ? "#22252b" : "#c9d6b8")
+          button press=play autofocus testId="play" aria-label="Race" padding=18 border-radius=14 min-width=200 background-color="#d83a2e"
+            text "RACE" font-size=22 font-weight=900 letter-spacing=3 color="#ffffff"
+          column align-items="center" gap=6
+            text "Right click: gas · Left click: brake" font-weight=700
+            text "Steering is automatic. Full speed into a corner and you will slide off." font-size=14 color="#c9d6b8" text-align="center"
+            text "On touch: right half is gas, left half is brake." font-size=13 color="#8c9a86"

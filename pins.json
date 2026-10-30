@@ -1,0 +1,9 @@
+{
+  "game": "kerb-racers",
+  "ticks": {},
+  "saves": {},
+  "hosts": [],
+  "generated": "bun game/prove.mjs kerb-racers",
+  "at": "unverified",
+  "help": "First baseline: bun game/prove.mjs kerb-racers; changed golden: add --repin. Empty pins fail ordinary proofs."
+}

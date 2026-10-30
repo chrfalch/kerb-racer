@@ -1,0 +1,12 @@
+// The menus and HUD on a host: `bun exact.mjs test web` (also macos, ios).
+// Gameplay is tested hostless in logic/tests: `bun exact.mjs test-rust`.
+test "Pick a track, race, and pause"
+  expect tree has "play"
+  tap "track-1"
+  tap "play"
+  expect tree has "world"
+  expect tree has "countdown"
+  clock +4000
+  expect text "hud-lap" == "1/3"
+  tap "pause"
+  expect tree has "restart"
