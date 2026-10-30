@@ -275,22 +275,36 @@ def mirrors(m, x, y, z):
 
 
 def fender(m, x, y, width):
-    """A flared arch over one wheel: the cap of a squashed ellipsoid in the body
-    colour. It hides the top of the tyre from the camera above, and leaves its
-    side, rim and hub in view."""
-    bpy.ops.mesh.primitive_uv_sphere_add(segments=20, ring_count=10, radius=1, location=(0, 0, 0))
-    o = bpy.context.active_object
-    o.name = f"fender{x:.2f}{y:.2f}"
+    """A wheel arch: a thick curved lip in the body colour over the top of one
+    wheel, clear of the tyre all round (tread included), so the turning tyre
+    shows below it and never through it."""
+    inner, outer = WHEEL + 0.06, WHEEL + 0.15
+    s = 1 if y > 0 else -1
+    # From inside the body out to just past the tyre's outer face.
+    y0, y1 = y - s * (width / 2 + 0.12), y + s * (width / 2 + 0.05)
+    spread = math.radians(78)
+    steps = 14
     bm = bmesh.new()
-    bm.from_mesh(o.data)
-    bmesh.ops.delete(bm, geom=[v for v in bm.verts if v.co.z < 0.55], context="VERTS")
-    bm.to_mesh(o.data)
+    rings = []
+    for k in range(steps + 1):
+        a = -spread + 2 * spread * k / steps
+        dx, dz = math.sin(a), math.cos(a)
+        rings.append([bm.verts.new((x + dx * r, yy, WHEEL + dz * r)) for r, yy in
+                      ((outer, y0), (outer, y1), (inner, y1), (inner, y0))])
+    for a, b in zip(rings, rings[1:]):
+        for j in range(4):
+            bm.faces.new([a[j], a[(j + 1) % 4], b[(j + 1) % 4], b[j]])
+    bm.faces.new(rings[0][::-1])
+    bm.faces.new(rings[-1])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new("fender")
+    bm.to_mesh(me)
     bm.free()
-    o.data.transform(Matrix.Diagonal((WHEEL + 0.1, width / 2 + 0.05, WHEEL + 0.12, 1.0)))
-    o.data.transform(Matrix.Translation((x, y, WHEEL)))
-    o.data.materials.append(m["paint"])
-    for p in o.data.polygons:
-        p.use_smooth = True
+    me.materials.append(m["paint"])
+    # Round over the top, crisp at the flat lip and inner wall.
+    for p in me.polygons:
+        p.use_smooth = abs(p.normal.y) < 0.5
+    o = link(bpy.data.objects.new(f"fender{x:.2f}{y:.2f}", me))
     return o
 
 
