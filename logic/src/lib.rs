@@ -96,6 +96,8 @@ pub struct Race {
     pub start: u64,
     /// Car ids in finishing order.
     pub order: Vec<u32>,
+    /// Car ids as the driver list shows them: see `settle_board`.
+    pub board: Vec<u32>,
     /// Where the camera looks, eased toward the player's path.
     pub focus_x: f32,
     pub focus_z: f32,
@@ -383,6 +385,7 @@ impl Game for KerbRacers {
             laps: args.laps,
             start: w.tick() + (COUNTDOWN * Self::HZ as f32) as u64,
             order: Vec::new(),
+            board: Vec::new(),
             focus_x: start.x,
             focus_z: start.y,
         });
@@ -452,6 +455,7 @@ impl Game for KerbRacers {
             player.brake = input.held("brake");
         }
         camera(w, false);
+        settle_board(w);
         hud(w);
     }
 }
@@ -689,7 +693,8 @@ fn camera(w: &mut World, snap: bool) {
         let k = if snap { 1.0 } else { (dt * 3.0).min(1.0) };
         race.focus_x += (target.x - race.focus_x) * k;
         race.focus_z += (target.y - race.focus_z) * k;
-        Vec3::new(race.focus_x, 0.0, race.focus_z)
+        // Aim up-screen of the car, so it sits below the middle with more road ahead.
+        Vec3::new(race.focus_x, 0.0, race.focus_z - 3.0)
     };
     let mut cam = w.require_mut::<Transform>("camera");
     *cam = Transform::at(focus.x, 33.0, focus.z + 24.0).looking_at(focus, Vec3::Y);
@@ -721,6 +726,35 @@ pub fn standings(w: &World) -> Vec<(u32, Car, f32)> {
         }
     });
     cars
+}
+
+/// How far (m) a car must be past the one above it before the driver list swaps them.
+const BOARD_MARGIN: f32 = 3.0;
+
+/// Reorder the driver list from its last order, with a margin, so two cars running
+/// side by side don't swap places on screen every frame. Finishers keep their order.
+fn settle_board(w: &mut World) {
+    let order = standings(w);
+    let mut race = w.resource_mut::<Race>();
+    let finished = race.order.clone();
+    let progress = |id: u32| order.iter().find(|o| o.0 == id).map_or(0.0, |o| o.2);
+    let running: Vec<u32> = if race.board.len() == order.len() {
+        race.board.iter().copied().filter(|id| !finished.contains(id)).collect()
+    } else {
+        order.iter().map(|o| o.0).filter(|id| !finished.contains(id)).collect()
+    };
+    let mut board = [finished.clone(), running].concat();
+    let mut swapped = true;
+    while swapped {
+        swapped = false;
+        for i in finished.len()..board.len().saturating_sub(1) {
+            if progress(board[i + 1]) > progress(board[i]) + BOARD_MARGIN {
+                board.swap(i, i + 1);
+                swapped = true;
+            }
+        }
+    }
+    race.board = board;
 }
 
 fn hex_string(rgb: u32) -> String {
@@ -805,6 +839,14 @@ fn hud(w: &World) {
     let order = standings(w);
     let radar = radar(w, &t, &order);
     drop(t);
+    let order: Vec<_> = if race.board.len() == order.len() {
+        race.board
+            .iter()
+            .filter_map(|id| order.iter().find(|o| o.0 == *id).cloned())
+            .collect()
+    } else {
+        order
+    };
     let player = w.require::<Car>("player").clone();
     let place = order
         .iter()

@@ -73,6 +73,12 @@ keyframes blink
 
 fn ordinal(n: number): string = n == 1 ? "1st" : n == 2 ? "2nd" : n == 3 ? "3rd" : `${n}th`
 
+// The speedometer: 0 to 140 km/h over a 240° sweep that opens at the bottom, in a 200-unit box.
+fn dialDeg(v: number): number = 150 + min(max(v, 0), 140) * 240 / 140
+fn dialX(r: number, v: number): number = 100 + r * cos(dialDeg(v) * 0.0174533)
+fn dialY(r: number, v: number): number = 100 + r * sin(dialDeg(v) * 0.0174533)
+fn dialArc(r: number, a: number, b: number): string = `M ${dialX(r, a)} ${dialY(r, a)} A ${r} ${r} 0 ${dialDeg(b) - dialDeg(a) > 180 ? 1 : 0} 1 ${dialX(r, b)} ${dialY(r, b)}`
+
 component KerbRacers
   state playing = false
   state track = 0
@@ -136,21 +142,63 @@ component KerbRacers
                 column width=10 height=10 border-radius=5 background-color=r.color border-width=1 border-color="#00000055"
                 text r.name width=40 font-weight=700 color=(r.you ? "#22252b" : "#fbf6e9")
                 text r.time font-size=12 color=(r.you ? "#22252b" : "#c9d6b8")
-          button press=togglePause testId="pause" aria-label=(paused ? "Resume" : "Pause") position="absolute" top="calc(env(safe-area-inset-top) + 16px)" right="calc(env(safe-area-inset-right) + 16px)" padding=12 border-radius=12 background-color="#14201bcc"
-            text (paused ? "Resume" : "Pause")
-          column position="absolute" left=0 right=0 bottom="calc(env(safe-area-inset-bottom) + 18px)" align-items="center" gap=8 pointer-events="none"
+          button press=togglePause testId="pause" aria-label=(paused ? "Resume" : "Pause") position="absolute" top="calc(env(safe-area-inset-top) + 16px)" left="50%" translate="-50% 0px" width=48 height=48 align-items="center" justify-content="center" border-radius=24 background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
+            svg width=20 height=20 viewBox="0 0 20 20"
+              if paused
+                polygon points="5,2 18,10 5,18" fill="#fbf6e9"
+              else
+                rect x=3 y=2 width=5 height=16 rx=1 fill="#fbf6e9"
+                rect x=12 y=2 width=5 height=16 rx=1 fill="#fbf6e9"
+          column position="absolute" left=0 right=0 bottom="calc(env(safe-area-inset-bottom) + 6px)" align-items="center" gap=8 pointer-events="none"
             if hud.off
               text "OFF TRACK" testId="off-track" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#a4472fe6"
             else
               if hud.sliding
                 text "SLIDING" testId="sliding" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#e8742ae6"
-            row gap=10 align-items="center" padding=10 border-radius=16 background-color="#14201bcc"
-              text "BRAKE" testId="brake-light" padding=8 border-radius=10 font-weight=800 font-size=13 background-color=(hud.brake ? "#d83a2e" : "#33402f") color=(hud.brake ? "#ffffff" : "#8c9a86")
-              column align-items="center" min-width=92
-                text `${hud.speed}` testId="hud-speed" font-size=32 font-weight=900 font-variant-numeric="tabular-nums"
-                text "km/h" font-size=11 color="#c9d6b8"
-              text "GAS" testId="gas-light" padding=8 border-radius=10 font-weight=800 font-size=13 background-color=(hud.gas ? "#3fae5a" : "#33402f") color=(hud.gas ? "#ffffff" : "#8c9a86")
-          column testId="radar" position="absolute" top="calc(env(safe-area-inset-top) + 76px)" right="calc(env(safe-area-inset-right) + 16px)" align-items="center" gap=6 pointer-events="none"
+            row gap=14 align-items="flex-end"
+              column testId="brake-light" align-items="center" gap=4 translate=(hud.brake ? "0px 3px" : "0px 0px") transition="translate 0.08s"
+                svg width=58 height=70 viewBox="0 0 58 70"
+                  if hud.brake
+                    rect x=1 y=1 width=56 height=68 rx=12 fill="none" stroke="#d83a2e" stroke-width=2 animation="blink 0.4s ease-in-out infinite"
+                  rect x=6 y=8 width=46 height=54 rx=9 fill=(hud.brake ? "#d83a2e" : "#2b3328") stroke="#22252b" stroke-width=2.5
+                  rect x=6 y=8 width=46 height=10 rx=9 fill="#fbf6e9" opacity=(hud.brake ? 0.35 : 0.1)
+                  rect x=14 y=24 width=30 height=3 rx=1.5 fill="#22252b" opacity=0.55
+                  rect x=14 y=32 width=30 height=3 rx=1.5 fill="#22252b" opacity=0.55
+                  rect x=14 y=40 width=30 height=3 rx=1.5 fill="#22252b" opacity=0.55
+                  rect x=14 y=48 width=30 height=3 rx=1.5 fill="#22252b" opacity=0.55
+                text "BRAKE" font-size=11 font-weight=900 letter-spacing=2 color=(hud.brake ? "#ffb4ab" : "#8c9a86")
+              column testId="speedo" position="relative" width=126 height=126
+                svg width=126 height=126 viewBox="0 0 200 200"
+                  circle cx=100 cy=100 r=98 fill="#22252b"
+                  circle cx=100 cy=100 r=94 fill="#14201b" stroke="#fbf6e9" stroke-width=2.5
+                  path d=dialArc(80, 0, 140) fill="none" stroke="#33402f" stroke-width=10
+                  path d=dialArc(80, 110, 140) fill="none" stroke="#d83a2e" stroke-width=10
+                  path d=dialArc(80, 110, 140) fill="none" stroke="#fbf6e9" stroke-width=10 stroke-dasharray="6 6"
+                  path d=dialArc(80, 0, max(hud.speed, 0.5)) fill="none" stroke="#f2c230" stroke-width=10
+                  for t in [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140] key=t
+                    line x1=dialX(t % 20 == 0 ? 62 : 67, t) y1=dialY(t % 20 == 0 ? 62 : 67, t) x2=dialX(73, t) y2=dialY(73, t) stroke="#fbf6e9" stroke-width=(t % 20 == 0 ? 3 : 1.5) stroke-linecap="square"
+                  g transform=`rotate(${dialDeg(hud.speed)} 100 100)`
+                    polygon points="100,95.5 86,100 100,104.5" fill="#22252b"
+                    polygon points="100,96 176,100 100,104" fill="#d83a2e" stroke="#22252b" stroke-width=1.2 stroke-linejoin="miter"
+                  circle cx=100 cy=100 r=10 fill="#22252b" stroke="#fbf6e9" stroke-width=2
+                  circle cx=100 cy=100 r=3.5 fill="#f2c230"
+                for t in [0, 20, 40, 60, 80, 100, 120, 140] key=t
+                  text `${t}` position="absolute" left=(dialX(50, t) * 0.63 - 12) top=(dialY(50, t) * 0.63 - 7) width=24 height=14 text-align="center" font-size=9 font-weight=800 font-variant-numeric="tabular-nums" color=(t >= 120 ? "#ff8a7a" : "#c9d6b8")
+                column position="absolute" left=0 right=0 top=84 align-items="center"
+                  text `${hud.speed}` testId="hud-speed" font-size=22 font-weight=900 font-variant-numeric="tabular-nums" color="#fbf6e9"
+                  text "KM/H" font-size=9 font-weight=800 letter-spacing=2 color="#f2c230"
+              column testId="gas-light" align-items="center" gap=4 translate=(hud.gas ? "0px 3px" : "0px 0px") transition="translate 0.08s"
+                svg width=58 height=70 viewBox="0 0 58 70"
+                  if hud.gas
+                    polygon points="22,10 29,2 36,10" fill="#3fae5a" animation="blink 0.45s ease-in-out infinite"
+                    polygon points="22,18 29,10 36,18" fill="#3fae5a" animation="blink 0.45s ease-in-out -0.15s infinite"
+                  rect x=15 y=20 width=28 height=46 rx=7 fill=(hud.gas ? "#3fae5a" : "#2b3328") stroke="#22252b" stroke-width=2.5
+                  rect x=15 y=20 width=28 height=9 rx=7 fill="#fbf6e9" opacity=(hud.gas ? 0.35 : 0.1)
+                  rect x=21 y=34 width=16 height=3 rx=1.5 fill="#22252b" opacity=0.55
+                  rect x=21 y=42 width=16 height=3 rx=1.5 fill="#22252b" opacity=0.55
+                  rect x=21 y=50 width=16 height=3 rx=1.5 fill="#22252b" opacity=0.55
+                text "GAS" font-size=11 font-weight=900 letter-spacing=2 color=(hud.gas ? "#a6e8b4" : "#8c9a86")
+          column testId="radar" position="absolute" top="calc(env(safe-area-inset-top) + 16px)" right="calc(env(safe-area-inset-left) + 16px)" align-items="center" gap=6 pointer-events="none"
             if hud.radar.ahead != ""
               text `▲ ${hud.radar.ahead}` testId="radar-ahead" padding-top=3 padding-bottom=3 padding-left=8 padding-right=8 border-radius=8 font-size=12 font-weight=700 font-variant-numeric="tabular-nums" background-color="#14201bcc"
             column width=150 height=150 border-radius=75 overflow="hidden" background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
