@@ -158,3 +158,28 @@ Then act on their answer:
 and bundle id with placeholders, and blanks anything that looks like a credential.
 That is a safety net, not a licence: write the diary as if none of it ran.
 <!-- exact:end -->
+
+## Baked shadows (read before changing trees, fences or props)
+
+Real-time sun shadows run at ~12 fps in Safari's WebGPU, so Medium and Low draw
+baked ones: `art/textures/shade-{0,1,2}.png` is an alpha overlay painted from
+the exact seeded positions of every pine, broadleaf, bush and fence section
+(`art/src/casters-{id}.json`), and each car carries a blob (`blob.png`).
+Real-time shadows are High only (`shadows: quality >= 2` in `light()`); keep it so.
+
+The logic test `baked_shade_matches_the_woods` fails whenever setup places the
+woods differently: a new tree model, a changed density, a different RNG draw
+order in `scenery::props` or anything that runs before it in `setup`. Then:
+
+```sh
+cd .shells && KR_REBAKE=1 cargo test -p kerb-racers-logic --test sim baked && cd ..
+blender -b -P art/src/shade.py          # repaints shade-*.png from the casters
+bun exact.mjs test-rust                 # rebakes assets/, reruns every test
+```
+
+If a tree model's shape changes (height, crown radius), update its numbers in
+`art/src/shade.py` (`CONIFERS`, the `tree-a` crown) so the painted shadow
+matches. New casters (a barrier, say) need a `kind` in the `casters()` filter in
+`logic/tests/sim.rs` and a branch in `shade.py`. If `bun exact.mjs test-rust`
+says a generated `blob`/`shade` asset "collides with an authored asset" after a
+merge, delete `assets/blob.*tex assets/shade-*.tex` and rerun: the bake recreates them.
