@@ -47,7 +47,22 @@ pub struct Car {
     pub brake: bool,
     pub sliding: bool,
     pub surface: u32,
+    /// Front wheels' steering angle (radians, left positive).
+    pub steer: f32,
+    /// The tyres' surface speed (m/s): ground speed while they grip, less when
+    /// the brakes lock them, more while they spin up off the line.
+    pub roll: f32,
+    /// How far the wheels have turned (radians, wrapped).
+    pub spin: f32,
 }
+
+/// Wheel radius of every car (m).
+pub const WHEEL_R: f32 = 0.36;
+/// Distance between the axles (m), for the steering angle.
+pub const WHEELBASE: f32 = 1.85;
+/// How hard the brakes slow the wheels themselves (m/s² at the tread): far
+/// more than the road can slow the car, so a stamp on the pedal locks them.
+pub const WHEEL_BRAKE: f32 = 70.0;
 
 /// Surfaces under a car.
 pub const ASPHALT: u32 = 0;
@@ -171,6 +186,20 @@ pub fn drive(track: &Track, body: &mut Body, cap: f32) {
 }
 
 /// One fixed step of one car on its own: steering, pedals, grip, fences.
+/// The wheels against the road: braking slows the tyres faster than the car,
+/// so they lock and the car slides on; off the brake they grip and roll at
+/// ground speed again; pulling away they spin up a little.
+fn wheels(car: &mut Car, ground: f32, dt: f32) {
+    if car.brake {
+        car.roll = (car.roll - WHEEL_BRAKE * dt).max(0.0);
+    } else {
+        let wheelspin = car.gas * (9.0 - ground).max(0.0) * 0.45;
+        car.roll += (ground + wheelspin - car.roll) * (dt * 16.0).min(1.0);
+    }
+    car.roll = car.roll.max(0.0);
+    car.spin = wrap_angle(car.spin + car.roll / WHEEL_R * dt);
+}
+
 pub fn step(track: &Track, body: &mut Body, dt: f32) {
     let speed = body.v().length();
     // Steering: pure pursuit toward the aim point, limited by the wheels.
@@ -185,6 +214,9 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     let max_yaw = (speed / 4.0).min(3.6);
     yaw = yaw.clamp(-max_yaw, max_yaw);
     body.car.heading = wrap_angle(body.car.heading + yaw * dt);
+    // The front wheels point along the arc the car is turning on.
+    let steer = math::atan(WHEELBASE * yaw / speed.max(1.0)).clamp(-0.55, 0.55);
+    body.car.steer += (steer - body.car.steer) * (dt * 14.0).min(1.0);
 
     let surface = body.car.surface;
     let grip = match surface {
@@ -229,6 +261,7 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
         }
     }
     body.p += v * dt;
+    wheels(&mut body.car, vf, dt);
     locate(track, body);
     fence(track, body);
 }

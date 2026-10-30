@@ -158,3 +158,28 @@ fn scenery_budget() {
         assert!(trees < 300, "{trees} trees on track {id}");
     }
 }
+
+#[test]
+fn wheels_roll_with_the_road_and_lock_under_braking() {
+    let mut game = race(0);
+    game.run(3500.0);
+    game.key_down("KeyW");
+    game.run(2500.0);
+    let car = game.world().require::<Car>("player").clone();
+    let ground = (car.vx * car.vx + car.vz * car.vz).sqrt();
+    assert!(ground > 10.0, "{ground} m/s");
+    assert!((car.roll - ground).abs() < 1.0, "rolling at {} for {ground} m/s", car.roll);
+    let before = car.spin;
+    game.run(100.0);
+    assert_ne!(game.world().require::<Car>("player").spin, before, "wheels turn");
+    // Stamp on the brake: the wheels lock well before the car stops.
+    game.key_up("KeyW");
+    game.key_down("KeyS");
+    game.run(400.0);
+    let car = game.world().require::<Car>("player").clone();
+    let ground = (car.vx * car.vx + car.vz * car.vz).sqrt();
+    assert!(ground > 2.0 && car.roll == 0.0, "car {ground} m/s, wheels {}", car.roll);
+    let locked = car.spin;
+    game.run(100.0);
+    assert_eq!(game.world().require::<Car>("player").spin, locked, "locked wheels hold still");
+}

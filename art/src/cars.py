@@ -3,7 +3,9 @@
 # big wheels, so they read at a glance from the camera high above.
 #   blender -b -P art/src/cars.py
 # Writes art/models/car-{0..5}.glb: nose along +X, wheels on the ground,
-# 3.2 m by 1.8 m so they match the game's collision shape.
+# 3.2 m by 1.8 m so they match the game's collision shape; and
+# wheel-{disc,fuchs}-{l,r}.glb, which the game spins and steers (it places them
+# where the WHEELS lines this prints say).
 import bpy, bmesh, math, os, sys
 from mathutils import Matrix, Vector
 
@@ -58,6 +60,8 @@ def section(hw, zb, zt, n, taper, ring):
 
 def loft(name, x0, x1, shape, mat, stations=30, ring=24):
     """Stations from x0 to x1; shape(x) -> (half width, bottom z, top z, exponent, taper)."""
+    # Remember the loft's length: decals draped over it end where it does.
+    shape.span = (min(x0, x1), max(x0, x1))
     bm = bmesh.new()
     rings = []
     for i in range(stations):
@@ -88,6 +92,9 @@ def loft(name, x0, x1, shape, mat, stations=30, ring=24):
 
 def surface_z(shape, x, y):
     """Height of a loft's upper surface at (x, y), or None off its plan."""
+    lo, hi = getattr(shape, "span", (-math.inf, math.inf))
+    if not lo <= x <= hi:
+        return None
     hw, zb, zt, n, taper = shape(x)
     w = hw * (1 + taper) / 2
     if abs(y) >= w:
@@ -97,7 +104,8 @@ def surface_z(shape, x, y):
 
 
 def decal(name, shapes, x0, x1, y0, y1, mat, lift=0.012, steps=36, across=3):
-    """A thin band draped over the highest of several lofts: stripes, roof panels."""
+    """A thin band draped over the highest of several lofts: stripes, roof panels.
+    It stops where the bodywork does: nothing hangs off the nose or the tail."""
     bm = bmesh.new()
     grid = []
     for i in range(steps + 1):
@@ -106,13 +114,17 @@ def decal(name, shapes, x0, x1, y0, y1, mat, lift=0.012, steps=36, across=3):
         for j in range(across + 1):
             y = y0 + (y1 - y0) * j / across
             zs = [z for z in (surface_z(s, x, y) for s in shapes) if z is not None]
-            row.append(bm.verts.new((x, y, (max(zs) if zs else 0.5) + lift)))
+            row.append((bm.verts.new((x, y, (max(zs) if zs else 0.0) + lift)), bool(zs)))
         grid.append(row)
     for a, b in zip(grid, grid[1:]):
         for j in range(across):
-            f = bm.faces.new([a[j], b[j], b[j + 1], a[j + 1]])
+            quad = [a[j], b[j], b[j + 1], a[j + 1]]
+            if not all(on for _, on in quad):
+                continue
+            f = bm.faces.new([v for v, _ in quad])
             if f.normal.z < 0:
                 f.normal_flip()
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
     me = bpy.data.meshes.new(name)
     bm.to_mesh(me)
     bm.free()
@@ -231,18 +243,30 @@ def wheels(m, front, rear, track, radius, width, rim_style="disc"):
 WHEELS = []
 
 
-def build_wheels(m, front, rear, track, radius, width, rim_style):
-    for x in (front, rear):
-        for s in (-1, 1):
-            y = s * track
-            cyl(f"tyre{x}{s}", (x, y, radius), radius, width, m["tyre"], verts=14)
-            cyl(f"rim{x}{s}", (x, y + s * (width / 2 + 0.002), radius), radius * 0.66, 0.012, m["rim"], verts=12)
-            cyl(f"hub{x}{s}", (x, y + s * (width / 2 + 0.008), radius), radius * 0.2, 0.012, m["hub"], verts=10)
-            if rim_style == "fuchs":
-                for k in range(5):
-                    a = k * 2 * math.pi / 5
-                    block(f"spoke{x}{s}{k}", (x + math.cos(a) * radius * 0.38, y + s * (width / 2 + 0.006), radius + math.sin(a) * radius * 0.38),
-                          (radius * 0.5, 0.01, radius * 0.12), m["black"], rot=(0, -a, 0))
+TYRE_WIDTH = 0.3
+
+
+def wheel_model(name, rim_style, s):
+    """One wheel on its own, centred on its axle, its rim facing out on side `s`
+    (+1 the car's left, -1 its right). The game spins and steers it."""
+    reset()
+    m = palette(0x000000, 0x000000, 0x000000)
+    radius, width = WHEEL, TYRE_WIDTH
+    # Tread blocks: a tyre has to show it turning.
+    cyl("tyre", (0, 0, 0), radius, width, m["tyre"], verts=16)
+    for k in range(8):
+        a = k * math.tau / 8
+        block(f"tread{k}", (math.cos(a) * radius, 0, math.sin(a) * radius), (0.05, width * 0.9, 0.03), m["hub"],
+              rot=(0, -a + math.pi / 2, 0))
+    cyl("rim", (0, s * (width / 2 + 0.002), 0), radius * 0.66, 0.012, m["rim"], verts=14)
+    cyl("hub", (0, s * (width / 2 + 0.008), 0), radius * 0.2, 0.012, m["hub"], verts=10)
+    spokes = 5 if rim_style == "fuchs" else 4
+    for k in range(spokes):
+        a = k * math.tau / spokes
+        block(f"spoke{k}", (math.cos(a) * radius * 0.38, s * (width / 2 + 0.006), math.sin(a) * radius * 0.38),
+              (radius * 0.5, 0.01, radius * 0.12 if rim_style == "fuchs" else radius * 0.08),
+              m["black"] if rim_style == "fuchs" else m["hub"], rot=(0, -a, 0))
+    export(name)
 
 
 def mirrors(m, x, y, z):
@@ -339,9 +363,10 @@ def finish(name, length, width, height, body):
     # Text and lamps lifted with the body: drop the body so its sills clear big wheels.
     m, front, rear, track, rim_style = WHEELS[0]
     # Tucked under the flared arches: the tyre's outer face just inside the fender.
-    width_w = 0.3
+    width_w = TYRE_WIDTH
     track = min(body(front)[0], body(rear)[0]) * sy - width_w / 2 - 0.03
-    build_wheels(m, front * sx, rear * sx, track, WHEEL, width_w, rim_style)
+    # The wheels are their own models (wheel_model); the game places them here.
+    print(f"WHEELS {name} {rim_style} front={front * sx:.3f} rear={rear * sx:.3f} track={track:.3f} radius={WHEEL}")
     for x in (front * sx, rear * sx):
         for side in (-1, 1):
             fender(m, x, side * track, width_w)
@@ -503,6 +528,9 @@ def escort(name, paint, stripe, roof, number, sponsor, ink, bands=()):
 
 
 os.makedirs(OUT, exist_ok=True)
+for style in ("disc", "fuchs"):
+    for side, s in (("l", 1), ("r", -1)):
+        wheel_model(f"wheel-{style}-{side}", style, s)
 # Grid order (game's DRIVERS): Juno, Mika, Rook, Ayla, You, Vex. The sponsors are invented.
 porsche("car-0", 0x22252B, 0xD4A93A, 0xF4F1EA, "1", "AURUM", 0xD4A93A)            # Juno: black and gold
 stratos("car-1", 0x7B45C8, 0xF4F1EA, 0xF4F1EA, "4", "NOVA", 0x22252B,

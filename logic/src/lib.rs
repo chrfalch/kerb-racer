@@ -150,6 +150,23 @@ pub struct Crown {
     pub height: f32,
 }
 
+/// One of a car's four wheels, drawn turning with the car's `spin` and, at
+/// the front, pointing along its `steer`.
+#[derive(Clone, Copy, Debug, Default, Component)]
+pub struct Wheel {
+    pub front: bool,
+}
+
+/// Where each car's wheels sit (axle x fore and aft, half track), and its rims,
+/// as `art/src/cars.py` prints them: the three body styles in grid order.
+fn wheel_layout(id: u32) -> (f32, f32, f32, &'static str) {
+    match id {
+        0 | 4 => (0.908, -0.862, 0.72, "fuchs"),
+        1 | 5 => (0.949, -0.906, 0.75, "disc"),
+        _ => (0.976, -0.944, 0.731, "disc"),
+    }
+}
+
 pub struct KerbRacers;
 impl Game for KerbRacers {
     const ID: &'static str = "kerb-racers";
@@ -173,6 +190,10 @@ impl Game for KerbRacers {
         "logs.model",
         "stump.model",
         "rock.model",
+        "wheel-disc-l.model",
+        "wheel-disc-r.model",
+        "wheel-fuchs-l.model",
+        "wheel-fuchs-r.model",
         "fence.model",
         "barrier.model",
         "poppies.model",
@@ -265,6 +286,19 @@ impl Game for KerbRacers {
                 ),
             );
             puffs(w, e, &name_of(k));
+            let (front, rear, track, rims) = wheel_layout(k);
+            for (x, is_front) in [(front, true), (rear, false)] {
+                // Blender's left (+Y) is the game's -Z.
+                for (z, side) in [(-track, "l"), (track, "r")] {
+                    w.spawn((
+                        Transform::at(x, car::WHEEL_R, z),
+                        Mesh::asset(format!("wheel-{rims}-{side}.model")),
+                        Wheel { front: is_front },
+                        Parent(e),
+                        Ambient,
+                    ));
+                }
+            }
             if k == PLAYER {
                 let marker = w
                     .generated("marker.model", scenery::marker())
@@ -422,6 +456,7 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
         }
     }
     car::collide(&mut list);
+    turn_wheels(w, &entities, &list);
     for body in list.iter_mut() {
         car::locate(&t, body);
     }
@@ -442,6 +477,29 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
             }
         }
         *w.require_mut::<Car>(*e) = body.car;
+    }
+}
+
+/// Each wheel turns by its car's `spin` (rolling forward about the axle, which
+/// runs along local Z) and the front pair also steers.
+fn turn_wheels(w: &mut World, cars: &[Entity], bodies: &[Body]) {
+    let wheels: Vec<(Entity, Entity, bool)> = w
+        .query::<(&Parent, &Wheel)>()
+        .iter()
+        .map(|(e, (parent, wheel))| (e, parent.0, wheel.front))
+        .collect();
+    for (e, parent, front) in wheels {
+        let Some(k) = cars.iter().position(|c| *c == parent) else {
+            continue;
+        };
+        let car = &bodies[k].car;
+        let steer = if front { car.steer } else { 0.0 };
+        // Heading grows toward the car's local +Z, so a turn that way is -Y.
+        let rotation = Quat::from_rotation_y(-steer) * Quat::from_rotation_z(-car.spin);
+        // Read first: a mutable borrow marks the row written even when nothing changes.
+        if w.require::<Transform>(e).rotation != rotation {
+            w.require_mut::<Transform>(e).rotation = rotation;
+        }
     }
 }
 
