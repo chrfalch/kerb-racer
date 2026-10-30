@@ -1,7 +1,7 @@
 use exact_game::Sim;
 use kerb_racers_logic::car::{Car, GRASS};
 use kerb_racers_logic::track::{self, Track, HALF};
-use kerb_racers_logic::{KerbRacers, Options, Race, PLAYER};
+use kerb_racers_logic::{radar, standings, KerbRacers, Options, Race, PLAYER, RADAR_REACH};
 
 fn race(track: u32) -> Sim<KerbRacers> {
     let mut sim = Sim::<KerbRacers>::new(Options {
@@ -238,4 +238,28 @@ fn baked_shade_matches_the_woods() {
             "track {id}'s woods moved: rebake its shade (KR_REBAKE=1, then art/src/shade.py)"
         );
     }
+}
+
+#[test]
+fn radar_follows_the_player_and_names_the_neighbours() {
+    let mut game = race(2);
+    game.key_down("KeyW");
+    game.run(8000.0);
+    let w = game.world();
+    let t = w.resource::<Track>();
+    let order = standings(w);
+    let r = radar(w, &t, &order);
+    let pose = w.require::<exact_game::Transform>("player");
+    let view: Vec<f32> = r.view.split(' ').map(|n| n.parse().unwrap()).collect();
+    assert!((view[0] + RADAR_REACH - pose.position.x).abs() < 0.1, "{}", r.view);
+    assert!((view[1] + RADAR_REACH - pose.position.z).abs() < 0.1, "{}", r.view);
+    assert_eq!(r.blips.len(), 6);
+    assert!(r.blips.last().unwrap().you, "the player draws on top");
+    let first = r.road.split(' ').next().unwrap();
+    assert_eq!(r.road.split(' ').last().unwrap(), first, "the road closes");
+    let place = order.iter().position(|(id, _, _)| *id == PLAYER).unwrap();
+    println!("place {} ahead {:?} behind {:?}", place + 1, r.ahead, r.behind);
+    assert_eq!(r.ahead.is_empty(), place == 0);
+    assert_eq!(r.behind.is_empty(), place == 5);
+    assert!(r.ahead.is_empty() || r.ahead.ends_with('s'));
 }

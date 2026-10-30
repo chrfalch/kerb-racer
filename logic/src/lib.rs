@@ -111,6 +111,35 @@ pub struct Row {
     pub you: bool,
 }
 
+/// One car on the radar: where it is (world metres) and which way it points.
+#[derive(Clone, Debug, Default, PartialEq, Data)]
+pub struct Blip {
+    pub id: u32,
+    /// `translate(x z) rotate(deg)`, ready for the SVG.
+    pub at: String,
+    pub fill: String,
+    pub ring: String,
+    pub you: bool,
+}
+
+/// The radar: a window of the circuit centred on the player, drawn the same
+/// way up as the camera, so it shows who is close by rather than the whole lap.
+#[derive(Clone, Debug, Default, PartialEq, Data)]
+pub struct Radar {
+    /// The SVG viewBox, in world metres around the player.
+    pub view: String,
+    /// The whole centreline as SVG points; the viewBox crops it.
+    pub road: String,
+    pub blips: Vec<Blip>,
+    /// The car one place up the order and the time to it ("Ayla 1.2s"), or "".
+    pub ahead: String,
+    /// The car one place down and the time it trails by, or "".
+    pub behind: String,
+}
+
+/// Half the radar's width, in metres: a little past the edge of the screen.
+pub const RADAR_REACH: f32 = 30.0;
+
 #[derive(Clone, Debug, Default, PartialEq, Data)]
 pub struct Hud {
     /// "grid", "race" or "done".
@@ -131,6 +160,7 @@ pub struct Hud {
     pub sliding: bool,
     pub off: bool,
     pub standings: Vec<Row>,
+    pub radar: Radar,
 }
 
 pub fn clock(ticks: u64, hz: u32) -> String {
@@ -694,14 +724,84 @@ fn hex_string(rgb: u32) -> String {
     format!("#{rgb:06x}")
 }
 
+/// The centreline every few metres, as SVG points; the last repeats the first.
+fn road_points(t: &Track) -> String {
+    let every = (4.0 / t.step).max(1.0) as usize;
+    let mut out = String::new();
+    for i in (0..t.len()).step_by(every).chain([0]) {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&format!("{:.1},{:.1}", t.x[i], t.z[i]));
+    }
+    out
+}
+
+/// Seconds it takes to cover `metres` at the circuit's average planned speed.
+fn gap(t: &Track, metres: f32) -> String {
+    let pace = t.speed.iter().sum::<f32>() / t.len().max(1) as f32;
+    format!("{:.1}s", metres.abs() / pace.max(1.0))
+}
+
+pub fn radar(w: &World, t: &Track, order: &[(u32, Car, f32)]) -> Radar {
+    let mut centre = Vec2::ZERO;
+    let mut blips = Vec::new();
+    for (_, (pose, car)) in w.query::<(&Transform, &Car)>().iter() {
+        let p = Vec2::new(pose.position.x, pose.position.z);
+        if car.id == PLAYER {
+            centre = p;
+        }
+        let d = &DRIVERS[car.id as usize];
+        blips.push(Blip {
+            id: car.id,
+            at: format!(
+                "translate({:.1} {:.1}) rotate({:.0})",
+                p.x,
+                p.y,
+                car.heading.to_degrees()
+            ),
+            fill: hex_string(d.paint),
+            ring: hex_string(d.trim),
+            you: car.id == PLAYER,
+        });
+    }
+    // The player last, so it draws on top.
+    blips.sort_by_key(|b| (b.you, b.id));
+    let at = order.iter().position(|(id, _, _)| *id == PLAYER);
+    let player = at.map(|k| &order[k]);
+    let racing = player.is_some_and(|(_, car, _)| !car.finished);
+    let neighbour = |k: Option<usize>| -> String {
+        match (racing, player, k.and_then(|k| order.get(k))) {
+            (true, Some((_, _, mine)), Some((id, car, theirs))) if !car.finished => {
+                format!("{} {}", DRIVERS[*id as usize].name, gap(t, theirs - mine))
+            }
+            _ => String::new(),
+        }
+    };
+    Radar {
+        view: format!(
+            "{:.1} {:.1} {:.0} {:.0}",
+            centre.x - RADAR_REACH,
+            centre.y - RADAR_REACH,
+            RADAR_REACH * 2.0,
+            RADAR_REACH * 2.0
+        ),
+        road: road_points(t),
+        blips,
+        ahead: neighbour(at.and_then(|k| k.checked_sub(1))),
+        behind: neighbour(at.map(|k| k + 1)),
+    }
+}
+
 fn hud(w: &World) {
     let hz = w.hz();
     let now = w.tick();
     let race = w.resource::<Race>().clone();
     let t = w.resource::<Track>();
     let name = track::layout(t.id).name.to_string();
-    drop(t);
     let order = standings(w);
+    let radar = radar(w, &t, &order);
+    drop(t);
     let player = w.require::<Car>("player").clone();
     let place = order
         .iter()
@@ -780,5 +880,6 @@ fn hud(w: &World) {
         sliding: player.sliding,
         off: player.surface == car::GRASS,
         standings: rows,
+        radar,
     });
 }
