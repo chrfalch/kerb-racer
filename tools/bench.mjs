@@ -4,7 +4,7 @@
 // pass, draws, triangles, culling) plus the page's requestAnimationFrame cadence.
 //
 //   bun tools/bench.mjs [q0 q1 q2 …] [--seconds 8] [--headless] [--vsync] [--dpr 2] [--size 1280x800]
-//                       [--dist target/web-dist] [--json out.json] [--shot prefix] [--raw]
+//                       [--dist target/web-dist] [--json out.json] [--shot prefix] [--profile] [--raw]
 //
 // A scenario is `q<quality>` optionally followed by `,t<track>` (q2,t1). Each
 // runs in a fresh Chrome: pick the quality, press Race, hold the gas (the
@@ -115,16 +115,23 @@ async function run(spec) {
     await key('keyDown');
     await sleep(warm);
     await client.evaluate(`${STATE}(true)`);
+    const profiling = args.includes('--profile');
+    if (profiling) {
+      await client.call('Profiler.enable');
+      await client.call('Profiler.setSamplingInterval', { interval: 200 });
+      await client.call('Profiler.start');
+    }
     const gaps = await client.evaluate(`new Promise(done => { const t = []; const end = performance.now() + ${seconds * 1000};
       const f = now => { t.push(now); if (now < end) requestAnimationFrame(f); else done(t.slice(1).map((x, i) => x - t[i])); };
       requestAnimationFrame(f); })`);
+    const cpu = profiling ? (await client.call('Profiler.stop')).profile : null;
     s = await client.evaluate(`${STATE}(false)`);
     const shot = flag('shot', null);
     if (shot) await Bun.write(`${shot}-${spec}.png`, Buffer.from((await client.call('Page.captureScreenshot')).data, 'base64'));
     const hud = await client.evaluate(`document.querySelector('[data-testid="hud-speed"]')?.textContent ?? null`);
     await key('keyUp');
     const adapter = await client.evaluate(`navigator.gpu?.requestAdapter().then(a => a ? [a.info?.vendor, a.info?.architecture, a.info?.description].filter(Boolean).join(' ') : 'none')`);
-    return { spec, quality, track, adapter, speed: hud, gaps, world: s.world };
+    return { spec, quality, track, adapter, speed: hud, gaps, world: s.world, cpu };
   } finally {
     client?.close();
     chrome.kill();
@@ -158,8 +165,18 @@ try {
       console.log('gpu passes (ms, intervals overlap; do not sum):');
       for (const [name, v] of rows) console.log(`  ${name.padEnd(36)} p50 ${f(v.p50, 3).padStart(7)}  p95 ${f(v.p95, 3).padStart(7)}  max ${f(v.max, 3).padStart(7)}`);
     } else console.log('gpu passes: none (no timestamp-query on this adapter?)');
+    if (r.cpu) {
+      // Main-thread self time by function over the sample window.
+      const self = new Map(), byId = new Map(r.cpu.nodes.map(n => [n.id, n]));
+      const total = r.cpu.timeDeltas.reduce((a, b) => a + b, 0);
+      r.cpu.samples.forEach((id, i) => { const c = byId.get(id).callFrame;
+        const k = `${c.functionName || '(anon)'} ${c.url.split('/').pop()}${c.lineNumber >= 0 ? ':' + c.lineNumber : ''}`;
+        self.set(k, (self.get(k) ?? 0) + r.cpu.timeDeltas[i]); });
+      console.log('main thread self time (% of window):');
+      for (const [k, v] of [...self].sort((a, b) => b[1] - a[1]).slice(0, 18)) console.log(`  ${(100 * v / total).toFixed(1).padStart(5)}%  ${k}`);
+    }
     if (args.includes('--raw')) console.log(JSON.stringify(r.world.perf, null, 1));
   }
 } finally { server.stop(true); }
 const out = flag('json', null);
-if (out) await Bun.write(out, JSON.stringify(results.map(({ gaps, ...r }) => ({ ...r, raf: { fps: gaps.length / seconds, p50: pct(sorted(gaps), .5), p95: pct(sorted(gaps), .95) } })), null, 1));
+if (out) await Bun.write(out, JSON.stringify(results.map(({ gaps, cpu, ...r }) => ({ ...r, raf: { fps: gaps.length / seconds, p50: pct(sorted(gaps), .5), p95: pct(sorted(gaps), .95) } })), null, 1));
