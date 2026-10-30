@@ -68,18 +68,18 @@ def paint_needles(name, base, tip, seed):
         y = h - 4 - t * (h - 20)
         dirx = 1 if side_twig % 2 else -1
         stroke(rgb, alpha, (w / 2, y), (w / 2 + dirx * (1 - t) * 90, y - 50), 2, np.array([0.28, 0.22, 0.12]))
-    for _ in range(1400):
+    for _ in range(2600):
         t = rng.random() ** 0.8
         y = h - 6 - t * (h - 24)
         spread = math.sin(math.pi * min(t * 1.1, 1.0)) ** 0.7 * (1 - 0.35 * t) * (w * 0.46)
-        x = w / 2 + rng.uniform(-0.6, 0.6) * spread * 0.6
+        x = w / 2 + rng.uniform(-0.85, 0.85) * spread * 0.7
         ang = rng.uniform(0.35, 1.1) * (1 if rng.random() < 0.5 else -1)
         length = rng.uniform(14, 30) * (1 - 0.4 * t)
         end = (x + math.sin(ang) * length, y - math.cos(ang) * length)
         if abs(end[0] - w / 2) > spread:
             continue
         mix = min(1, t * 0.6 + rng.random() * 0.6)
-        stroke(rgb, alpha, (x, y), end, rng.uniform(1.4, 2.4), base * (1 - mix) + tip * mix)
+        stroke(rgb, alpha, (x, y), end, rng.uniform(1.8, 3.0), base * (1 - mix) + tip * mix)
     return save(name, bleed(rgb, alpha), alpha)
 
 
@@ -91,15 +91,15 @@ def paint_leaves(name, base, tip, count, seed):
     alpha = np.zeros((n, n))
     for _ in range(count):
         a = rng.uniform(0, math.tau)
-        d = (rng.random() ** 0.6) * n * 0.42
+        d = (rng.random() ** 0.45) * n * 0.44
         x, y = n / 2 + math.cos(a) * d, n / 2 + math.sin(a) * d
         ang = rng.uniform(0, math.tau)
-        length = rng.uniform(16, 28)
+        length = rng.uniform(18, 32)
         end = (x + math.cos(ang) * length, y + math.sin(ang) * length)
         mix = rng.random()
         # Leaves near the top of the texture catch more light.
         mix = min(1, mix * 0.7 + (1 - y / n) * 0.5)
-        stroke(rgb, alpha, (x, y), end, rng.uniform(4, 7), base * (1 - mix) + tip * mix)
+        stroke(rgb, alpha, (x, y), end, rng.uniform(5, 9), base * (1 - mix) + tip * mix)
     return save(name, bleed(rgb, alpha), alpha)
 
 
@@ -164,16 +164,22 @@ class Cards:
         self.uv = self.bm.loops.layers.uv.new("UVMap")
         self.name, self.mat = name, mat
         self.centre, self.stretch = Vector(centre), Vector(stretch)
+        # Per-vertex shading centre: a lobe's own centre, or the crown's.
+        self.centres = {}
 
-    def card(self, root, direction, up, length, width, droop=0.0, segments=3):
-        """A bent strip from `root` along `direction`, the texture's v running root to tip."""
+    def card(self, root, direction, up, length, width, droop=0.0, segments=3, centre=None):
+        """A bent strip from `root` along `direction`, the texture's v running root to tip.
+        `centre` shades it as part of a lobe around that point instead of the whole crown."""
         direction = direction.normalized()
         side = direction.cross(up).normalized() * (width / 2)
         rows = []
         for k in range(segments + 1):
             t = k / segments
             p = root + direction * (length * t) - Vector((0, 0, 1)) * droop * t * t
-            rows.append((self.bm.verts.new(p - side), self.bm.verts.new(p + side), t))
+            a, b = self.bm.verts.new(p - side), self.bm.verts.new(p + side)
+            if centre is not None:
+                self.centres[a] = self.centres[b] = (Vector(centre), 1.0)
+            rows.append((a, b, t))
         for (a0, a1, t0), (b0, b1, t1) in zip(rows, rows[1:]):
             f = self.bm.faces.new([a0, a1, b1, b0])
             for loop, uv in zip(f.loops, [(0, t0), (1, t0), (1, t1), (0, t1)]):
@@ -181,6 +187,8 @@ class Cards:
 
     def build(self):
         me = bpy.data.meshes.new(self.name)
+        self.bm.verts.index_update()
+        lobes = {v.index: c for v, c in self.centres.items()}
         self.bm.to_mesh(me)
         self.bm.free()
         me.materials.append(self.mat)
@@ -188,9 +196,12 @@ class Cards:
             p.use_smooth = True
         normals = []
         for v in me.vertices:
-            d = v.co - self.centre
-            d = Vector((d.x / self.stretch.x, d.y / self.stretch.y, d.z / self.stretch.z))
-            normals.append((d.normalized() + Vector((0, 0, 0.35))).normalized())
+            # Round, soft shading: each leaf takes the normal of the blob it sits on.
+            lobe = lobes.get(v.index)
+            d = v.co - (lobe[0] if lobe else self.centre)
+            if not lobe:
+                d = Vector((d.x / self.stretch.x, d.y / self.stretch.y, d.z / self.stretch.z))
+            normals.append((d.normalized() + Vector((0, 0, 0.45))).normalized())
         me.normals_split_custom_set_from_vertices(normals)
         return link(bpy.data.objects.new(self.name, me))
 
@@ -213,26 +224,30 @@ def conifer(name, seed, height, needles_path):
     mat = cutout("needles", needles_path)
     # An opaque core inside the branches: it hides the cards behind it, so the
     # GPU rejects them by depth instead of shading layer after layer of needles.
-    core = material("core", 0x2B5226, rough=0.95)
-    bpy.ops.mesh.primitive_cone_add(vertices=6, radius1=height * 0.12, radius2=0.0, depth=height * 0.6,
-                                    location=(0, 0, height * 0.25 + height * 0.3))
+    # Dark, so the gaps between branches read as the shade inside the tree.
+    core = material("core", 0x18301F, rough=0.95)
+    bpy.ops.mesh.primitive_cone_add(vertices=8, radius1=height * 0.2, radius2=0.0, depth=height * 0.6,
+                                    location=(0, 0, height * 0.15 + height * 0.3))
     bpy.context.active_object.data.materials.append(core)
     cards = Cards("crown", mat, (0, 0, height * 0.45), (1, 1, 1.6))
-    # Few, broad branches: overdraw, not triangles, is what foliage costs.
-    whorls = int(height * 1.1)
-    for k in range(whorls):
-        t = k / (whorls - 1)
-        z = height * (0.2 + 0.78 * t)
-        reach = (1 - t) ** 0.95 * height * 0.34 + 0.45
-        n = max(5, int(8 - 3 * t))
+    # Stacked tiers, each a round skirt of broad, overlapping branches: from above
+    # the tree reads as a few soft rings, darker underneath each one.
+    tiers = max(4, int(height * 0.6))
+    for k in range(tiers):
+        t = k / (tiers - 1)
+        z = height * (0.18 + 0.72 * t)
+        reach = (1 - t) ** 0.9 * height * 0.36 + 0.55
+        tier = Vector((0, 0, z - reach * 0.15))
+        n = max(5, int(9 - 4 * t))
         twist = rng.uniform(0, math.tau)
         for j in range(n):
-            a = twist + j * math.tau / n + rng.uniform(-0.25, 0.25)
-            out = Vector((math.cos(a), math.sin(a), rng.uniform(-0.05, 0.25)))
-            # One card per branch, alternately flat and tilted, for volume from every angle.
-            tilt = 0.8 if (j + k) % 2 else 0.1
+            a = twist + j * math.tau / n + rng.uniform(-0.2, 0.2)
+            out = Vector((math.cos(a), math.sin(a), rng.uniform(0.0, 0.2)))
+            # Mostly flat to the camera, a few tilted for the silhouette.
+            tilt = 0.6 if (j + k) % 3 == 0 else 0.05
             up = Vector((0, 0, 1)).lerp(Vector((-math.sin(a), math.cos(a), 0)), tilt).normalized()
-            cards.card(Vector((0, 0, z)), out, up, reach * rng.uniform(0.9, 1.1), reach * 1.05, droop=reach * 0.35, segments=2)
+            cards.card(Vector((0, 0, z)), out, up, reach * rng.uniform(0.95, 1.1), reach * 1.5,
+                       droop=reach * 0.45, segments=2, centre=tier)
     # The leader: crossed vertical cards.
     for a in (0, math.pi / 2):
         d = Vector((math.cos(a), math.sin(a), 0))
@@ -241,20 +256,39 @@ def conifer(name, seed, height, needles_path):
     export(name)
 
 
-def broadleaf_bush(name, seed, leaves_path, size, lobes):
+def broadleaf_bush(name, seed, leaves_path, size, lobes, core_hex, trunk_height=0.0):
+    """Round clumps of leaves: each lobe an opaque dark ball wrapped in leaf cards
+    that lie on its surface, shaded as one soft sphere."""
     reset()
     rng = random.Random(seed)
     mat = cutout("leaves", leaves_path)
-    cards = Cards("leaves", mat, (0, 0, size * 0.6), (1, 1, 0.8))
+    core = material("core", core_hex, rough=0.95)
+    if trunk_height:
+        bark = material("bark", 0x4A3220, rough=0.95)
+        trunk("trunk", trunk_height + size * 0.3, size * 0.07, size * 0.035, bark)
+    base = trunk_height
+    cards = Cards("leaves", mat, (0, 0, base + size * 0.5), (1, 1, 0.8))
     for k in range(lobes):
-        a = rng.uniform(0, math.tau)
-        d = rng.uniform(0, size * 0.45)
-        c = Vector((math.cos(a) * d, math.sin(a) * d, size * rng.uniform(0.35, 0.8)))
-        for j in range(6):
-            dirn = Vector((rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(-0.4, 1))).normalized()
-            up = dirn.orthogonal().normalized()
-            s = size * rng.uniform(0.45, 0.65)
-            cards.card(c - dirn * s * 0.5, dirn, up, s, s, segments=1)
+        a = k * math.tau / lobes + rng.uniform(-0.3, 0.3)
+        d = 0.0 if k == 0 else size * rng.uniform(0.22, 0.38)
+        r = size * (0.42 if k == 0 else rng.uniform(0.26, 0.34))
+        c = Vector((math.cos(a) * d, math.sin(a) * d, base + r * 0.9 + (size * 0.25 if k == 0 else rng.uniform(0, size * 0.15))))
+        bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=r * 0.8, location=c)
+        ball = bpy.context.active_object
+        ball.data.materials.append(core)
+        for p in ball.data.polygons:
+            p.use_smooth = True
+        cards_on = 14 if k == 0 else 10
+        for j in range(cards_on):
+            # Spread over the upper hemisphere, where the camera looks.
+            u = (j + rng.random()) / cards_on
+            phi = math.acos(1 - 1.4 * u)
+            th = rng.uniform(0, math.tau)
+            nrm = Vector((math.sin(phi) * math.cos(th), math.sin(phi) * math.sin(th), math.cos(phi)))
+            tang = nrm.orthogonal().normalized()
+            s = r * rng.uniform(1.1, 1.35)
+            centre = c + nrm * r * 0.85
+            cards.card(centre - tang * s * 0.5, tang, nrm, s, s, segments=1, centre=c)
     cards.build()
     export(name)
 
@@ -359,35 +393,74 @@ def rock(name, seed):
 
 
 def fence(name):
-    """A three-metre section from x=0 to x=3: post, top and bottom rails, an X brace."""
+    """A three-metre section from x=0 to x=3: a capped post, a half post, a chunky
+    top rail and a rail low down, and a lattice of X braces, one per half bay."""
     reset()
     post = material("post", 0x5A361D, rough=0.9)
-    rail = material("rail", 0x86522D, rough=0.85)
-    box("post", (0, 0, 0.6), (0.18, 0.18, 1.2), post)
-    box("cap", (0, 0, 1.22), (0.22, 0.22, 0.06), post)
-    box("top", (1.5, 0, 1.05), (3.04, 0.1, 0.14), rail)
-    box("bottom", (1.5, 0, 0.25), (3.04, 0.1, 0.12), rail)
-    angle = math.atan2(0.8, 2.9)
-    for s in (-1, 1):
-        box(f"brace{s}", (1.5, 0.02 * s, 0.65), (3.0, 0.07, 0.11), rail, rot=(0, s * angle, 0))
+    rail = material("rail", 0x8E5730, rough=0.85)
+    box("post", (0, 0, 0.65), (0.22, 0.22, 1.3), post, bevel=0.03)
+    box("cap", (0, 0, 1.32), (0.28, 0.28, 0.07), post, bevel=0.02)
+    box("mid", (1.5, 0, 0.55), (0.14, 0.14, 1.1), post, bevel=0.02)
+    box("top", (1.5, 0, 1.12), (3.04, 0.16, 0.16), rail, bevel=0.03)
+    box("bottom", (1.5, 0, 0.22), (3.04, 0.11, 0.11), rail, bevel=0.02)
+    angle = math.atan2(0.82, 1.42)
+    for k, x in enumerate((0.75, 2.25)):
+        for s in (-1, 1):
+            box(f"brace{k}{s}", (x, 0.025 * s, 0.67), (1.62, 0.07, 0.1), rail, rot=(0, s * angle, 0))
+    export(name)
+
+
+def barrier(name):
+    """A low trackside hoarding in front of the fence, three metres long: boards
+    in alternating red and white on a wooden frame, leaning back a little."""
+    reset()
+    frame = material("frame", 0x5A361D, rough=0.9)
+    red = material("red", 0xC9372B, rough=0.7)
+    white = material("white", 0xEDE8DC, rough=0.7)
+    for x in (0.0, 1.5):
+        box(f"stake{x}", (x + 0.08, 0.12, 0.3), (0.1, 0.1, 0.6), frame)
+    for k in range(6):
+        box(f"board{k}", (k * 0.5 + 0.25, 0, 0.32), (0.48, 0.06, 0.5), red if k % 2 == 0 else white,
+            rot=(math.radians(-8), 0, 0), bevel=0.012)
+    box("rail", (1.5, 0.06, 0.6), (3.0, 0.1, 0.07), frame, rot=(math.radians(-8), 0, 0))
+    export(name)
+
+
+def poppies(name):
+    """A little clump of red poppies on thin stems."""
+    reset()
+    stem = material("stem", 0x4D7A2A, rough=0.8)
+    petal = material("petal", 0xD8281E, rough=0.6)
+    heart = material("heart", 0x1E1A16, rough=0.8)
+    rng = random.Random(17)
+    for k in range(5):
+        x, y = rng.uniform(-0.25, 0.25), rng.uniform(-0.25, 0.25)
+        h = rng.uniform(0.22, 0.38)
+        cylinder(f"stem{k}", (x, y, h / 2), 0.012, h, stem, verts=4)
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=8, ring_count=4, radius=0.075, location=(x, y, h))
+        c = bpy.context.active_object
+        c.scale.z = 0.45
+        c.data.materials.append(petal)
+        cylinder(f"heart{k}", (x, y, h + 0.032), 0.022, 0.012, heart, verts=6)
     export(name)
 
 
 os.makedirs(FOLIAGE, exist_ok=True)
 os.makedirs(OUT, exist_ok=True)
 reset()
-needles = paint_needles("needles", [0.20, 0.38, 0.16], [0.42, 0.62, 0.22], 3)
-needles_dark = paint_needles("needles-dark", [0.14, 0.30, 0.15], [0.30, 0.50, 0.22], 4)
-needles_warm = paint_needles("needles-warm", [0.26, 0.40, 0.14], [0.58, 0.68, 0.24], 5)
-leaves = paint_leaves("leaves", np.array([0.22, 0.40, 0.14]), np.array([0.55, 0.72, 0.25]), 900, 5)
-shrub = paint_leaves("shrub", np.array([0.26, 0.42, 0.15]), np.array([0.70, 0.78, 0.30]), 700, 6)
+# Deep blue-greens in the shade, warm yellow only where the low sun catches the tips.
+needles = paint_needles("needles", [0.10, 0.25, 0.18], [0.38, 0.54, 0.24], 3)
+needles_dark = paint_needles("needles-dark", [0.07, 0.19, 0.15], [0.26, 0.42, 0.22], 4)
+needles_warm = paint_needles("needles-warm", [0.13, 0.29, 0.16], [0.50, 0.60, 0.25], 5)
+leaves = paint_leaves("leaves", np.array([0.12, 0.29, 0.14]), np.array([0.50, 0.64, 0.24]), 1500, 5)
+shrub = paint_leaves("shrub", np.array([0.15, 0.33, 0.15]), np.array([0.58, 0.70, 0.28]), 1200, 6)
 fern_tex = paint_fern()
 daisy_tex = paint_daisies()
 conifer("pine-a", 1, 8.5, needles)
 conifer("pine-b", 2, 6.5, needles_dark)
 conifer("pine-c", 3, 10.5, needles_warm)
-broadleaf_bush("tree-a", 4, leaves, 4.2, 9)
-broadleaf_bush("bush", 5, shrub, 1.4, 4)
+broadleaf_bush("tree-a", 4, leaves, 4.6, 6, 0x1C3A1E, trunk_height=2.2)
+broadleaf_bush("bush", 5, shrub, 1.5, 4, 0x21401F)
 fern("fern", fern_tex)
 daisies("daisies", daisy_tex)
 mushrooms("mushrooms")
@@ -395,4 +468,6 @@ logs("logs")
 stump("stump")
 rock("rock", 6)
 fence("fence")
+barrier("barrier")
+poppies("poppies")
 print("nature written to", OUT)

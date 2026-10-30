@@ -1,4 +1,18 @@
 {
-  "app": { "name": "Kerb Racers" },
-  "game": { "assets": true }
+  "app": {
+    "name": "Kerb Racers"
+  },
+  "game": {
+    "assets": true,
+    "render": {
+      "crate": "kerb-racers-render",
+      "hooks": "Lens",
+      "shaders": "shaders::SHADERS"
+    }
+  },
+  "gpu": {
+    "shaderRoots": [
+      "render/shaders"
+    ]
+  }
 }

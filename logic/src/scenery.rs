@@ -1,7 +1,7 @@
 //! Generated geometry: the textured ground and road with its kerbs and lines,
 //! flowers, the player's marker, and where the Blender models stand.
 use crate::track::{Track, HALF, RUNOFF, WALL};
-use exact_game::asset::{MaterialData, MeshData, Model, Node};
+use exact_game::asset::{AlphaMode, MaterialData, MeshData, Model, Node};
 use exact_game::*;
 
 /// sRGB hex to linear RGBA.
@@ -88,6 +88,10 @@ impl Builder {
     }
     /// An upward quad with texture coordinates at its corners.
     pub fn quad_uv(&mut self, q: [Vec3; 4], uv: [Vec2; 4], color: [f32; 4]) {
+        self.quad_uvc(q, uv, [color; 4]);
+    }
+    /// An upward quad with texture coordinates and a colour at each corner.
+    pub fn quad_uvc(&mut self, q: [Vec3; 4], uv: [Vec2; 4], colors: [[f32; 4]; 4]) {
         let up = (q[1] - q[0]).cross(q[2] - q[0]).y >= 0.0;
         let order = if up {
             [0, 1, 2, 0, 2, 3]
@@ -100,7 +104,7 @@ impl Builder {
             self.m.positions.extend([p.x, p.y, p.z]);
             self.m.normals.extend([0.0, 1.0, 0.0]);
             self.m.uvs.extend([uv[k].x, uv[k].y]);
-            self.m.colors.extend(color);
+            self.m.colors.extend(colors[k]);
             self.lo = self.lo.min(p);
             self.hi = self.hi.max(p);
         }
@@ -194,6 +198,22 @@ fn textured(
     tile: f32,
     tint: impl Fn(usize) -> [f32; 4],
 ) {
+    textured_strips(b, t, from, to, 1, y, tile, |i, _| tint(i));
+}
+
+/// A textured ribbon cut into `strips` across, tinted at every corner by
+/// `tint(sample, lateral offset)`: shading that varies across the road.
+#[allow(clippy::too_many_arguments)]
+fn textured_strips(
+    b: &mut Builder,
+    t: &Track,
+    from: f32,
+    to: f32,
+    strips: usize,
+    y: f32,
+    tile: f32,
+    tint: impl Fn(usize, f32) -> [f32; 4],
+) {
     let n = t.len();
     // The loop's length in whole tiles, so the texture closes without a seam.
     let tiles = (t.length() / tile).round().max(1.0);
@@ -201,21 +221,25 @@ fn textured(
     for i in 0..n {
         let j = (i + 1) % n;
         let (v0, v1) = (along(i), along(i) + tiles / n as f32);
-        b.quad_uv(
-            [
-                v3(t.at(i, from), y),
-                v3(t.at(i, to), y),
-                v3(t.at(j, to), y),
-                v3(t.at(j, from), y),
-            ],
-            [
-                Vec2::new(from / tile, v0),
-                Vec2::new(to / tile, v0),
-                Vec2::new(to / tile, v1),
-                Vec2::new(from / tile, v1),
-            ],
-            tint(i),
-        );
+        for k in 0..strips {
+            let a = from + (to - from) * k as f32 / strips as f32;
+            let c = from + (to - from) * (k + 1) as f32 / strips as f32;
+            b.quad_uvc(
+                [
+                    v3(t.at(i, a), y),
+                    v3(t.at(i, c), y),
+                    v3(t.at(j, c), y),
+                    v3(t.at(j, a), y),
+                ],
+                [
+                    Vec2::new(a / tile, v0),
+                    Vec2::new(c / tile, v0),
+                    Vec2::new(c / tile, v1),
+                    Vec2::new(a / tile, v1),
+                ],
+                [tint(i, a), tint(i, c), tint(j, c), tint(j, a)],
+            );
+        }
     }
 }
 
@@ -267,9 +291,12 @@ pub fn road(t: &Track) -> Model {
         |i| shade([1.0; 4], 0.9 + 0.12 * noise(i as i32, 0, 3)),
     );
     let mut tarmac = Builder::new();
-    textured(&mut tarmac, t, -HALF, HALF, 0.04, 4.6, |i| {
-        // Rubbered-in darker where the cars run, lighter near the edges is in the texture.
-        shade([1.0; 4], 0.96 + 0.06 * noise(i as i32 / 6, 1, 5))
+    textured_strips(&mut tarmac, t, -HALF, HALF, 10, 0.04, 4.6, |i, lat| {
+        // Rubbered in darker along the racing line, dusty and lighter at the edges.
+        let d = (lat - t.line[i]) / 1.6;
+        let rubber = 0.22 * math::exp(-d * d);
+        let edge = 0.08 * ((lat.abs() - (HALF - 1.0)) / 1.0).clamp(0.0, 1.0);
+        shade([1.0; 4], (0.98 + 0.05 * noise(i as i32 / 6, 1, 5)) * (1.0 - rubber) + edge)
     });
     let mut verge = Builder::new();
     for side in [-1.0f32, 1.0] {
@@ -295,26 +322,50 @@ pub fn road(t: &Track) -> Model {
             |_| Some(white),
         );
     }
-    // Kerbs on both sides of every real corner, red and white in 1.5 m blocks.
+    // Kerbs on both sides of every real corner: raised red and white blocks about
+    // a metre long, ramped on both edges so they catch the light like the real thing.
     let red = hex(0xd83a2e);
     let kerb = |i: usize| (0..9).any(|k| t.bend[(i + n + k - 4) % n].abs() > 1.0 / 24.0);
+    // Across the kerb: (lateral offset from the asphalt edge inward, height).
+    let profile = [(-0.15, 0.045), (0.05, 0.13), (0.45, 0.13), (0.6, 0.03)];
+    let red_block = |i: usize| (i as f32 * t.step) as i32 % 2 == 0;
     for s in [-1.0f32, 1.0] {
-        ribbon(
-            &mut paint,
-            t,
-            s * (HALF - 0.15),
-            s * (HALF + 0.6),
-            0.06,
-            |i| {
-                kerb(i).then(|| {
-                    if ((i as f32 * t.step / 1.5) as i32) % 2 == 0 {
-                        red
-                    } else {
-                        white
-                    }
-                })
-            },
-        );
+        for i in (0..n).filter(|&i| kerb(i)) {
+            let j = (i + 1) % n;
+            let top = if red_block(i) { red } else { white };
+            for (k, w) in profile.windows(2).enumerate() {
+                // Ramps a shade darker than the top, which faces the sun.
+                let c = if k == 1 { top } else { shade(top, 0.8) };
+                let (l0, h0) = (s * (HALF + w[0].0), w[0].1);
+                let (l1, h1) = (s * (HALF + w[1].0), w[1].1);
+                paint.quad_up(
+                    v3(t.at(i, l0), h0),
+                    v3(t.at(i, l1), h1),
+                    v3(t.at(j, l1), h1),
+                    v3(t.at(j, l0), h0),
+                    c,
+                );
+            }
+            // The block's leading face, where its colour changes.
+            let prev = (i + n - 1) % n;
+            if kerb(prev) && red_block(prev) != red_block(i) {
+                for w in profile.windows(2) {
+                    let (l0, h0) = (s * (HALF + w[0].0), w[0].1);
+                    let (l1, h1) = (s * (HALF + w[1].0), w[1].1);
+                    let back = -t.tangent(i);
+                    paint.face(
+                        [
+                            v3(t.at(i, l0), 0.03),
+                            v3(t.at(i, l1), 0.03),
+                            v3(t.at(i, l1), h1),
+                            v3(t.at(i, l0), h0),
+                        ],
+                        Vec3::new(back.x, 0.0, back.y),
+                        shade(top, 0.6),
+                    );
+                }
+            }
+        }
     }
     // A chequered start/finish line.
     let cells = 12;
@@ -342,8 +393,10 @@ pub fn road(t: &Track) -> Model {
     paint.material = 2;
     let mut verge = verge.finish();
     verge.material = 3;
+    let mut marks = skids(t);
+    marks.material = 4;
     model(
-        vec![clay, tarmac, paint, verge],
+        vec![clay, tarmac, paint, verge, marks],
         vec![
             textured_material(0, 0.95),
             textured_material(1, 0.85),
@@ -353,9 +406,61 @@ pub fn road(t: &Track) -> Model {
                 ..MaterialData::default()
             },
             textured_material(2, 0.95),
+            MaterialData {
+                metallic: 0.0,
+                roughness: 0.9,
+                alpha_mode: AlphaMode::Blend,
+                ..MaterialData::default()
+            },
         ],
         &["clay.tex", "asphalt.tex", "grass.tex"],
     )
+}
+
+/// Rubber laid down under braking: dark tyre streaks along the racing line into
+/// every slow corner, a few cars' worth each, fading in and out. Vertex alpha
+/// carries the fade; the material blends.
+fn skids(t: &Track) -> MeshData {
+    let mut b = Builder::new();
+    let n = t.len();
+    let reach = (24.0 / t.step) as usize;
+    let apexes = (0..n).filter(|&i| {
+        let v = t.speed[i];
+        v < crate::track::VMAX * 0.8
+            && (1..reach).all(|k| v <= t.speed[(i + k) % n] && v <= t.speed[(i + n - k) % n])
+    });
+    for (a, apex) in apexes.enumerate() {
+        for set in 0..3u32 {
+            let shift = (noise(a as i32, set as i32, 21) - 0.5) * 0.9;
+            let start = reach - (noise(a as i32, set as i32, 22) * 6.0 / t.step) as usize;
+            let len = start + (5.0 / t.step) as usize;
+            let strength = 0.22 + 0.18 * noise(a as i32, set as i32, 23);
+            for tyre in [-0.78f32, 0.78] {
+                for k in 0..len {
+                    let i = (apex + n - start + k) % n;
+                    let j = (i + 1) % n;
+                    let fade = |k: usize| {
+                        let u = k as f32 / len as f32;
+                        strength * smooth(0.0, 0.25, u) * (1.0 - smooth(0.7, 1.0, u))
+                    };
+                    let (l0, l1) = (t.line[i] + shift + tyre, t.line[j] + shift + tyre);
+                    let c0 = [0.02, 0.02, 0.02, fade(k)];
+                    let c1 = [0.02, 0.02, 0.02, fade(k + 1)];
+                    b.quad_uvc(
+                        [
+                            v3(t.at(i, l0 - 0.12), 0.045),
+                            v3(t.at(i, l0 + 0.12), 0.045),
+                            v3(t.at(j, l1 + 0.12), 0.045),
+                            v3(t.at(j, l1 - 0.12), 0.045),
+                        ],
+                        [Vec2::ZERO; 4],
+                        [c0, c0, c1, c1],
+                    );
+                }
+            }
+        }
+    }
+    b.finish()
 }
 
 /// The grass: a textured grid, tinted in broad patches so the tiling never shows.
@@ -363,27 +468,36 @@ pub fn ground(t: &Track) -> Model {
     let mut b = Builder::new();
     let (cx, cz) = centre_of(t);
     let cell = 4.0;
-    let (nx, nz) = (48, 42);
+    let (nx, nz) = (48usize, 42usize);
     let tile = 7.0;
+    let x0 = cx - nx as f32 * cell * 0.5;
+    let z0 = cz - nz as f32 * cell * 0.5;
+    // One tint per grid corner, shared by the four cells around it, so the
+    // shading is a smooth wash: bright mown grass by the road, darkening into
+    // the shade under the woods, with broad soft patches across it.
+    let tints: Vec<[f32; 4]> = (0..=nx)
+        .flat_map(|i| (0..=nz).map(move |j| (i, j)))
+        .map(|(i, j)| {
+            let p = Vec2::new(x0 + i as f32 * cell, z0 + j as f32 * cell);
+            let woods = smooth(WALL - 1.0, WALL + 14.0, clearance(t, p));
+            let (a, b) = (i as i32, j as i32);
+            let patch = 0.5 * noise(a / 3, b / 3, 11) + 0.5 * noise((a + 1) / 3, (b + 1) / 3, 11);
+            let k = (1.08 - 0.4 * woods) * (0.94 + 0.12 * patch);
+            [k * (1.0 - 0.1 * woods), k, k * (0.95 + 0.08 * woods), 1.0]
+        })
+        .collect();
+    let at = |i: usize, j: usize| tints[i * (nz + 1) + j];
     for i in 0..nx {
         for j in 0..nz {
-            let x0 = cx - nx as f32 * cell * 0.5 + i as f32 * cell;
-            let z0 = cz - nz as f32 * cell * 0.5 + j as f32 * cell;
-            let k = 0.86 + 0.22 * noise(i / 3, j / 3, 11) + 0.06 * noise(i, j, 12);
-            let c = [
-                k,
-                k * (0.98 + 0.04 * noise(i / 4, j / 4, 13)),
-                k * 0.95,
-                1.0,
-            ];
+            let (xa, za) = (x0 + i as f32 * cell, z0 + j as f32 * cell);
             let q = [
-                Vec3::new(x0, 0., z0),
-                Vec3::new(x0 + cell, 0., z0),
-                Vec3::new(x0 + cell, 0., z0 + cell),
-                Vec3::new(x0, 0., z0 + cell),
+                Vec3::new(xa, 0., za),
+                Vec3::new(xa + cell, 0., za),
+                Vec3::new(xa + cell, 0., za + cell),
+                Vec3::new(xa, 0., za + cell),
             ];
             let uv = q.map(|p| Vec2::new(p.x / tile, p.z / tile));
-            b.quad_uv(q, uv, c);
+            b.quad_uvc(q, uv, [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)]);
         }
     }
     model(
@@ -402,6 +516,11 @@ pub fn centre_of(t: &Track) -> (f32, f32) {
     ((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5)
 }
 
+fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 fn clearance(t: &Track, p: Vec2) -> f32 {
     (0..t.len())
         .map(|i| (t.centre(i) - p).length())
@@ -414,6 +533,20 @@ pub struct Prop {
     pub at: Vec2,
     pub yaw: f32,
     pub scale: Vec3,
+    /// A tree's crown: radius and height in metres, for fading it out of the way.
+    pub crown: Option<(f32, f32)>,
+}
+
+impl Prop {
+    fn new(model: &'static str, at: Vec2, yaw: f32, scale: Vec3) -> Self {
+        Self {
+            model,
+            at,
+            yaw,
+            scale,
+            crown: None,
+        }
+    }
 }
 
 /// Fence sections along both fence lines, then trees, bushes and rocks beyond them.
@@ -428,13 +561,56 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
             let a = t.at(i, s * (t.wall[i] - 0.2));
             let c = t.at(j, s * (t.wall[j] - 0.2));
             let d = c - a;
-            out.push(Prop {
-                model: "fence.model",
-                at: a,
-                yaw: math::atan2(d.y, d.x),
-                scale: Vec3::new(d.length() / 3.0, 1.0, 1.0),
-            });
+            out.push(Prop::new(
+                "fence.model",
+                a,
+                math::atan2(d.y, d.x),
+                Vec3::new(d.length() / 3.0, 1.0, 1.0),
+            ));
+            // Red and white boards in front of the fence round the outside of corners.
+            let room = t.wall[i].min(t.wall[j]) > HALF + RUNOFF + 3.2;
+            if room && t.bend[i] * s < -1.0 / 40.0 {
+                let lat = s * (HALF + RUNOFF + 2.0);
+                let (p, q) = (t.at(i, lat), t.at(j, lat));
+                // The frame always behind the boards, away from the road.
+                let (from, d) = if s > 0.0 { (q, p - q) } else { (p, q - p) };
+                out.push(Prop::new(
+                    "barrier.model",
+                    from,
+                    math::atan2(d.y, d.x),
+                    Vec3::new(d.length() / 3.0, 1.0, 1.0),
+                ));
+            }
             i += every;
+        }
+    }
+    // Dressing along the verge: ferns, poppies and stones, logs by the corners.
+    if quality > 0 {
+        let every = (4.0 / t.step).max(1.0) as usize;
+        for s in [-1.0f32, 1.0] {
+            for i in (0..n).step_by(every) {
+                let lat = s * (HALF + RUNOFF + w.rand(1.9..2.8));
+                let p = t.at(i, lat);
+                if t.wall[i] < HALF + RUNOFF + 3.4 || clearance(t, p) < HALF + RUNOFF + 1.6 {
+                    continue;
+                }
+                let roll = w.rand(0.0..1.0);
+                let corner = t.bend[i].abs() > 1.0 / 30.0;
+                let model = match roll {
+                    r if r < 0.3 => "fern.model",
+                    r if r < 0.4 => "poppies.model",
+                    r if r < 0.46 => "rock.model",
+                    r if r < 0.56 && corner => "logs.model",
+                    _ => continue,
+                };
+                let scale = if model == "rock.model" { 0.6 } else { 1.0 };
+                out.push(Prop::new(
+                    model,
+                    p,
+                    w.rand(0.0..std::f32::consts::TAU),
+                    Vec3::splat(scale * w.rand(0.8..1.15)),
+                ));
+            }
         }
     }
     let (cx, cz) = centre_of(t);
@@ -467,12 +643,27 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
             continue;
         }
         placed.push((p, radius * scale * 0.85));
+        let height = match model {
+            "pine-a.model" => 8.5,
+            "pine-b.model" => 6.5,
+            "pine-c.model" => 10.5,
+            _ => 6.8,
+        };
         out.push(Prop {
-            model,
-            at: p,
-            yaw: w.rand(0.0..std::f32::consts::TAU),
-            scale: Vec3::splat(scale),
+            crown: Some((radius * scale * 1.15, height * scale)),
+            ..Prop::new(model, p, w.rand(0.0..std::f32::consts::TAU), Vec3::splat(scale))
         });
+        // Toadstools at the foot of the odd tree.
+        if undergrowth > 0 && w.chance(0.12) {
+            let a = w.rand(0.0..std::f32::consts::TAU);
+            let (sa, ca) = math::sin_cos(a);
+            out.push(Prop::new(
+                "mushrooms.model",
+                p + Vec2::new(ca, sa) * (radius * scale * 0.55),
+                a,
+                Vec3::splat(w.rand(1.0..1.6)),
+            ));
+        }
     }
     // Undergrowth on the grass between the verge and the fences, and in the infield.
     for _ in 0..undergrowth {
@@ -487,7 +678,7 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
                 ("fern.model", 0.9),
                 ("bush.model", 1.1),
                 ("daisies.model", 0.6),
-                ("daisies.model", 0.6),
+                ("poppies.model", 0.4),
                 ("mushrooms.model", 0.3),
                 ("stump.model", 0.4),
                 ("rock.model", 0.9),
@@ -502,37 +693,66 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
             continue;
         }
         placed.push((p, radius));
-        out.push(Prop {
+        out.push(Prop::new(
             model,
-            at: p,
-            yaw: w.rand(0.0..std::f32::consts::TAU),
-            scale: Vec3::splat(w.rand(0.8..1.2)),
-        });
+            p,
+            w.rand(0.0..std::f32::consts::TAU),
+            Vec3::splat(w.rand(0.8..1.2)),
+        ));
     }
     out
 }
 
-/// Flowers dotted over the grass, as one generated mesh.
+/// Flowers in little clusters over the grass, as one generated mesh: white
+/// daisies with yellow hearts, the odd red poppy with a dark one.
 pub fn flowers(w: &World, t: &Track) -> MeshData {
     let mut b = Builder::new();
     let (cx, cz) = centre_of(t);
-    let flower = [hex(0xffffff), hex(0xf6e7a1), hex(0xf2c6d6), hex(0xffffff)];
-    for k in 0..900 {
-        let p = Vec2::new(w.rand(cx - 75.0..cx + 75.0), w.rand(cz - 65.0..cz + 65.0));
-        if clearance(t, p) < HALF + RUNOFF + 0.6 {
+    let daisy = (hex(0xf6f3ea), hex(0xf2c230));
+    let poppy = (hex(0xd8281e), hex(0x2a1d16));
+    let pale = (hex(0xf2c6d6), hex(0xf6e7a1));
+    for k in 0..260 {
+        let c = Vec2::new(w.rand(cx - 75.0..cx + 75.0), w.rand(cz - 65.0..cz + 65.0));
+        let clear = clearance(t, c);
+        if !(HALF + RUNOFF + 1.2..WALL + 12.0).contains(&clear) {
             continue;
         }
-        let c = flower[k % 4];
-        let r = 0.14;
-        b.quad_up(
-            Vec3::new(p.x - r, 0.03, p.y - r),
-            Vec3::new(p.x + r, 0.03, p.y - r),
-            Vec3::new(p.x + r, 0.03, p.y + r),
-            Vec3::new(p.x - r, 0.03, p.y + r),
-            c,
-        );
+        let (petal, heart) = match k % 9 {
+            0 | 5 => poppy,
+            3 => pale,
+            _ => daisy,
+        };
+        for _ in 0..w.rand(3..8u32) {
+            let p = c + Vec2::new(w.rand(-0.9..0.9), w.rand(-0.9..0.9));
+            if clearance(t, p) < HALF + RUNOFF + 0.8 {
+                continue;
+            }
+            blossom(&mut b, p, w.rand(0.11..0.17), w.rand(0.0..1.0), petal, heart);
+        }
     }
     b.finish()
+}
+
+/// One flower lying on the grass: a ring of round-tipped petals and a raised heart.
+fn blossom(b: &mut Builder, p: Vec2, r: f32, turn: f32, petal: [f32; 4], heart: [f32; 4]) {
+    let y = 0.05;
+    let at = |a: f32, d: f32, h: f32| {
+        let (s, c) = math::sin_cos(a);
+        Vec3::new(p.x + c * d, h, p.y + s * d)
+    };
+    let tau = std::f32::consts::TAU;
+    let petals = 7;
+    for k in 0..petals {
+        let a = turn * tau + k as f32 / petals as f32 * tau;
+        let w = tau / petals as f32 * 0.42;
+        // A kite: narrow at the heart, round at the tip.
+        b.quad_up(at(a, r * 0.25, y), at(a - w, r * 0.75, y), at(a, r, y), at(a + w, r * 0.75, y), petal);
+    }
+    for k in 0..6 {
+        let a = k as f32 / 6.0 * tau;
+        let a2 = (k + 1) as f32 / 6.0 * tau;
+        b.tri(at(0.0, 0.0, y + 0.02), at(a, r * 0.3, y + 0.01), at(a2, r * 0.3, y + 0.01), heart);
+    }
 }
 
 /// The player's marker: a downward chevron that floats over the car.
