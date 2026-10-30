@@ -116,10 +116,10 @@ component KerbRacers
     every(1400, nextHint)
 
   view
-    main width="100%" height="100%" background-color="#1d2b1a" color="#fbf6e9" font-family="system-ui"
+    main viewport-fit="cover" width="100%" height="100%" background-color="#1d2b1a" color="#fbf6e9" font-family="system-ui"
       if playing
         canvas surface=world(seed=7, track=track, laps=3, quality=quality, paused=(paused or (not started and hud.phase != "race" and hud.phase != "done")), restart=again) testId="world" width="100%" height="100%" position="relative" user-select="none"
-          row testId="hud-top" position="absolute" top=16 left=16 gap=10 pointer-events="none"
+          row testId="hud-top" position="absolute" top="calc(env(safe-area-inset-top) + 16px)" left="calc(env(safe-area-inset-left) + 16px)" gap=10 pointer-events="none"
             column padding=12 border-radius=14 background-color="#14201bcc" align-items="center" min-width=74
               text "POS" font-size=11 font-weight=700 letter-spacing=2 color="#c9d6b8"
               text `${hud.place}/${hud.cars}` testId="hud-place" font-size=30 font-weight=900
@@ -129,16 +129,16 @@ component KerbRacers
             column padding=12 border-radius=14 background-color="#14201bcc" gap=2 min-width=120
               text hud.time testId="hud-time" font-size=24 font-weight=800 font-variant-numeric="tabular-nums"
               text `Best ${hud.best}` testId="hud-best" font-size=12 color="#c9d6b8"
-          column testId="standings" position="absolute" top=104 left=16 gap=4 pointer-events="none"
+          column testId="standings" position="absolute" top="calc(env(safe-area-inset-top) + 104px)" left="calc(env(safe-area-inset-left) + 16px)" gap=4 pointer-events="none"
             for r in hud.standings key=r.id
               row gap=8 align-items="center" padding-top=4 padding-bottom=4 padding-left=8 padding-right=10 border-radius=8 background-color=(r.you ? "#f2c230e6" : "#14201bb3")
                 text `${r.place}` width=14 font-weight=800 color=(r.you ? "#22252b" : "#fbf6e9")
                 column width=10 height=10 border-radius=5 background-color=r.color border-width=1 border-color="#00000055"
                 text r.name width=40 font-weight=700 color=(r.you ? "#22252b" : "#fbf6e9")
                 text r.time font-size=12 color=(r.you ? "#22252b" : "#c9d6b8")
-          button press=togglePause testId="pause" aria-label=(paused ? "Resume" : "Pause") position="absolute" top=16 right=16 padding=12 border-radius=12 background-color="#14201bcc"
+          button press=togglePause testId="pause" aria-label=(paused ? "Resume" : "Pause") position="absolute" top="calc(env(safe-area-inset-top) + 16px)" right="calc(env(safe-area-inset-right) + 16px)" padding=12 border-radius=12 background-color="#14201bcc"
             text (paused ? "Resume" : "Pause")
-          column position="absolute" left=0 right=0 bottom=18 align-items="center" gap=8 pointer-events="none"
+          column position="absolute" left=0 right=0 bottom="calc(env(safe-area-inset-bottom) + 18px)" align-items="center" gap=8 pointer-events="none"
             if hud.off
               text "OFF TRACK" testId="off-track" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#a4472fe6"
             else
@@ -150,7 +150,7 @@ component KerbRacers
                 text `${hud.speed}` testId="hud-speed" font-size=32 font-weight=900 font-variant-numeric="tabular-nums"
                 text "km/h" font-size=11 color="#c9d6b8"
               text "GAS" testId="gas-light" padding=8 border-radius=10 font-weight=800 font-size=13 background-color=(hud.gas ? "#3fae5a" : "#33402f") color=(hud.gas ? "#ffffff" : "#8c9a86")
-          column testId="radar" position="absolute" right=16 bottom=18 align-items="center" gap=6 pointer-events="none"
+          column testId="radar" position="absolute" top="calc(env(safe-area-inset-top) + 76px)" right="calc(env(safe-area-inset-right) + 16px)" align-items="center" gap=6 pointer-events="none"
             if hud.radar.ahead != ""
               text `▲ ${hud.radar.ahead}` testId="radar-ahead" padding-top=3 padding-bottom=3 padding-left=8 padding-right=8 border-radius=8 font-size=12 font-weight=700 font-variant-numeric="tabular-nums" background-color="#14201bcc"
             column width=150 height=150 border-radius=75 overflow="hidden" background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
@@ -163,7 +163,7 @@ component KerbRacers
             if hud.radar.behind != ""
               text `▼ ${hud.radar.behind}` testId="radar-behind" padding-top=3 padding-bottom=3 padding-left=8 padding-right=8 border-radius=8 font-size=12 font-weight=700 font-variant-numeric="tabular-nums" color="#c9d6b8" background-color="#14201bcc"
           if hud.phase == ""
-            column testId="loading" role="status" aria-label=`Loading ${trackName(track)}` position="absolute" inset=0 align-items="center" justify-content="center" gap=22 background-color="#1d2b1a"
+            column testId="loading" role="status" aria-label=`Loading ${trackName(track)}` position="absolute" inset=0 box-sizing="border-box" padding-top="env(safe-area-inset-top)" padding-right="max(env(safe-area-inset-left), env(safe-area-inset-right))" padding-bottom="env(safe-area-inset-bottom)" padding-left="max(env(safe-area-inset-left), env(safe-area-inset-right))" align-items="center" justify-content="center" gap=22 background-color="#1d2b1a"
               column align-items="center" gap=4
                 text "KERB RACERS" font-size=34 font-weight=900 letter-spacing=4 color="#f2c230"
                 text trackName(track) testId="loading-track" font-size=16 font-weight=700 color="#c9d6b8"
@@ -206,13 +206,13 @@ component KerbRacers
                 text "Right click: gas · Left click: brake" padding=10 border-radius=12 background-color="#14201bcc"
                 text "Steering is automatic. Too fast into a corner and you'll slide off." font-size=14 color="#c9d6b8" text-align="center"
           if hud.phase == "grid" and started
-            column testId="countdown" position="absolute" top=24 left=0 right=0 align-items="center" gap=8 pointer-events="none"
+            column testId="countdown" position="absolute" top="calc(env(safe-area-inset-top) + 24px)" left="env(safe-area-inset-left)" right="env(safe-area-inset-right)" align-items="center" gap=8 pointer-events="none"
               text `${hud.count}` font-size=84 font-weight=900 color="#fbf6e9"
               text hud.track font-size=20 font-weight=700 color="#f2c230"
               text "Right click: gas · Left click: brake" padding=10 border-radius=12 background-color="#14201bcc"
               text "Steering is automatic. Too fast into a corner and you'll slide off." font-size=14 color="#c9d6b8"
           if hud.go
-            column testId="go" position="absolute" top=24 left=0 right=0 align-items="center" pointer-events="none"
+            column testId="go" position="absolute" top="calc(env(safe-area-inset-top) + 24px)" left="env(safe-area-inset-left)" right="env(safe-area-inset-right)" align-items="center" pointer-events="none"
               text "GO!" font-size=84 font-weight=900 color="#3fae5a"
           if hud.phase == "done"
             column testId="results" position="absolute" inset=0 align-items="center" justify-content="center" background-color="#0f1a12b3"
@@ -241,7 +241,7 @@ component KerbRacers
               button press=menu testId="quit" aria-label="Quit to menu" padding=12 border-radius=12 background-color="#33402f"
                 text "Menu"
       else
-        column width="100%" height="100%" box-sizing="border-box" padding=24 align-items="center" justify-content="center" gap=26 background-color="#1d2b1a"
+        column width="100%" height="100%" box-sizing="border-box" padding-top="calc(env(safe-area-inset-top) + 24px)" padding-right="calc(max(env(safe-area-inset-left), env(safe-area-inset-right)) + 24px)" padding-bottom="calc(env(safe-area-inset-bottom) + 24px)" padding-left="calc(max(env(safe-area-inset-left), env(safe-area-inset-right)) + 24px)" align-items="center" justify-content="center" gap=26 background-color="#1d2b1a"
           column align-items="center" gap=6
             text "KERB RACERS" font-size=56 font-weight=900 letter-spacing=4 color="#f2c230"
             text "Short tracks. Six cars. Two pedals." font-size=18 color="#c9d6b8"
