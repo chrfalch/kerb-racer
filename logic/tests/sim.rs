@@ -218,12 +218,8 @@ fn casters(game: &Sim<KerbRacers>) -> String {
 fn baked_shade_matches_the_woods() {
     // KR_REBAKE=1 rewrites the lists; then run `blender -b -P art/src/shade.py`.
     for id in 0..3 {
-        // Setup places the woods before any asset arrives: no delivery needed.
-        let game = Sim::<KerbRacers>::new(Options {
-            track: id,
-            ..Options::default()
-        })
-        .unwrap();
+        // Setup waits for the declared models, so deliver them as a host would.
+        let game = race(id);
         let path = format!(
             "{}/../../art/src/casters-{id}.json",
             env!("CARGO_MANIFEST_DIR")

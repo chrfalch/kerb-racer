@@ -40,6 +40,32 @@ shape Hud
   standings: list<Row>
   radar: Radar
 
+fn trackName(n: number): string = n == 0 ? "Pine Hollow" : n == 1 ? "Fern Loop" : "Kerb Ring"
+
+fn tip(n: number): string = n == 0 ? "Warming up the tyres…" : n == 1 ? "Painting the kerbs red and white…" : n == 2 ? "Planting the pine trees…" : n == 3 ? "Polishing the chrome bumpers…" : n == 4 ? "Sweeping leaves off the racing line…" : n == 5 ? "Telling five rivals to drive nicely…" : "Topping up the fuel…"
+
+keyframes lap
+  from rotate=0
+  to rotate=360
+
+keyframes kerbs
+  from stroke-dashoffset=0
+  to stroke-dashoffset=-24
+
+keyframes bounce
+  from translate="0px 0px"
+  50% translate="0px -3px"
+  to translate="0px 0px"
+
+keyframes puff
+  from opacity=0.7 scale=0.4
+  to opacity=0 scale=1.6
+
+keyframes blink
+  from opacity=0.25
+  50% opacity=1
+  to opacity=0.25
+
 fn ordinal(n: number): string = n == 1 ? "1st" : n == 2 ? "2nd" : n == 3 ? "3rd" : `${n}th`
 
 component KerbRacers
@@ -48,6 +74,7 @@ component KerbRacers
   state quality = 1
   state again = false
   state paused = false
+  state hint = 0
   resource hud = exactSurface("world") as shape Hud
 
   action pick(n: number)
@@ -58,7 +85,11 @@ component KerbRacers
 
   action play
     paused = false
+    hint = 0
     playing = true
+
+  action nextHint
+    hint = (hint + 1) % 7
 
   action togglePause
     paused = not paused
@@ -70,6 +101,9 @@ component KerbRacers
   action menu
     playing = false
     paused = false
+
+  task hints when playing
+    every(1400, nextHint)
 
   view
     main width="100%" height="100%" background-color="#1d2b1a" color="#fbf6e9" font-family="system-ui"
@@ -118,6 +152,41 @@ component KerbRacers
                     polygon points=(b.you ? "4.6,0 -3.2,3 -1.6,0 -3.2,-3" : "3.8,0 -2.6,2.5 -1.3,0 -2.6,-2.5") fill=b.fill stroke=(b.you ? "#22252b" : b.ring) stroke-width=(b.you ? 1.1 : 0.8) stroke-linejoin="round"
             when hud.radar.behind != ""
               text `▼ ${hud.radar.behind}` testId="radar-behind" padding-top=3 padding-bottom=3 padding-left=8 padding-right=8 border-radius=8 font-size=12 font-weight=700 font-variant-numeric="tabular-nums" color="#c9d6b8" background-color="#14201bcc"
+          when hud.phase == ""
+            column testId="loading" role="status" aria-label=`Loading ${trackName(track)}` position="absolute" inset=0 align-items="center" justify-content="center" gap=22 background-color="#1d2b1a"
+              column align-items="center" gap=4
+                text "KERB RACERS" font-size=34 font-weight=900 letter-spacing=4 color="#f2c230"
+                text trackName(track) testId="loading-track" font-size=16 font-weight=700 color="#c9d6b8"
+              svg width=220 height=220 viewBox="0 0 220 220"
+                circle cx=110 cy=110 r=96 fill="#2c3d27"
+                circle cx=110 cy=110 r=78 fill="none" stroke="#4a4f4c" stroke-width=26
+                circle cx=110 cy=110 r=92 fill="none" stroke="#d83a2e" stroke-width=6
+                circle cx=110 cy=110 r=92 fill="none" stroke="#fbf6e9" stroke-width=6 stroke-dasharray="12 12" animation="kerbs 0.6s linear infinite"
+                circle cx=110 cy=110 r=64 fill="none" stroke="#d83a2e" stroke-width=5
+                circle cx=110 cy=110 r=64 fill="none" stroke="#fbf6e9" stroke-width=5 stroke-dasharray="10 10" animation="kerbs 0.6s linear infinite"
+                circle cx=110 cy=110 r=78 fill="none" stroke="#fbf6e966" stroke-width=1.2 stroke-dasharray="6 8"
+                rect x=104 y=96 width=12 height=28 fill="#fbf6e9" stroke="#22252b" stroke-width=1
+                rect x=104 y=96 width=6 height=7 fill="#22252b"
+                rect x=110 y=103 width=6 height=7 fill="#22252b"
+                rect x=104 y=110 width=6 height=7 fill="#22252b"
+                rect x=110 y=117 width=6 height=7 fill="#22252b"
+                g transform-box="view-box" transform-origin="110px 110px" animation="lap 2.2s linear infinite"
+                  g transform-box="fill-box" transform-origin="center" animation="bounce 0.3s ease-in-out infinite"
+                    circle cx=96 cy=26 r=4 fill="#c9d6b8" transform-box="fill-box" transform-origin="center" animation="puff 0.5s ease-out infinite"
+                    circle cx=90 cy=34 r=3 fill="#c9d6b8" transform-box="fill-box" transform-origin="center" animation="puff 0.5s ease-out -0.25s infinite"
+                    rect x=100 y=25 width=24 height=13 rx=4 fill="#d83a2e" stroke="#22252b" stroke-width=1.2
+                    rect x=110 y=27 width=7 height=9 rx=2 fill="#9fd3e6" stroke="#22252b" stroke-width=0.8
+                    rect x=103 y=22 width=6 height=3 rx=1 fill="#22252b"
+                    rect x=116 y=22 width=6 height=3 rx=1 fill="#22252b"
+                    rect x=103 y=38 width=6 height=3 rx=1 fill="#22252b"
+                    rect x=116 y=38 width=6 height=3 rx=1 fill="#22252b"
+                    circle cx=125 cy=28 r=1.3 fill="#f2c230"
+                    circle cx=125 cy=35 r=1.3 fill="#f2c230"
+              text tip(hint) testId="loading-tip" font-size=16 font-weight=700 color="#fbf6e9" text-align="center"
+              row gap=8
+                column width=10 height=10 border-radius=5 background-color="#d83a2e" animation="blink 0.9s ease-in-out infinite"
+                column width=10 height=10 border-radius=5 background-color="#f2c230" animation="blink 0.9s ease-in-out -0.6s infinite"
+                column width=10 height=10 border-radius=5 background-color="#3fae5a" animation="blink 0.9s ease-in-out -0.3s infinite"
           when hud.phase == "grid"
             column testId="countdown" position="absolute" top=24 left=0 right=0 align-items="center" gap=8 pointer-events="none"
               text `${hud.count}` font-size=84 font-weight=900 color="#fbf6e9"
