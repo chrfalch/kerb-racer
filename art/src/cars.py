@@ -49,7 +49,7 @@ def section(hw, zb, zt, n, taper, ring):
     return pts
 
 
-def loft(name, x0, x1, shape, mat, stations=44, ring=36):
+def loft(name, x0, x1, shape, mat, stations=30, ring=24):
     """Stations from x0 to x1; shape(x) -> (half width, bottom z, top z, exponent, taper)."""
     bm = bmesh.new()
     rings = []
@@ -89,7 +89,7 @@ def surface_z(shape, x, y):
     return zc + hz * (1 - (abs(y) / w) ** n) ** (1 / n)
 
 
-def decal(name, shapes, x0, x1, y0, y1, mat, lift=0.012, steps=60, across=4):
+def decal(name, shapes, x0, x1, y0, y1, mat, lift=0.012, steps=36, across=3):
     """A thin band draped over the highest of several lofts: stripes, roof panels."""
     bm = bmesh.new()
     grid = []
@@ -139,6 +139,68 @@ def block(name, at, size, mat, bevel=0.0, rot=(0, 0, 0)):
     return o
 
 
+def text_mesh(name, body, size, mat, rot_z=0.0, side=0):
+    """Bold text as a thin mesh centred on the origin, lying flat (side=0) or
+    standing on the car's flank (side=±1, reading front to back from outside)."""
+    bpy.ops.object.text_add(location=(0, 0, 0))
+    o = bpy.context.active_object
+    o.name = name
+    o.data.body = body
+    o.data.size = size
+    o.data.align_x = "CENTER"
+    o.data.align_y = "CENTER"
+    o.data.extrude = 0.0
+    o.data.resolution_u = 3
+    o.data.offset = size * 0.035
+    o.data.space_character = 1.05
+    bpy.ops.object.convert(target="MESH")
+    o = bpy.context.active_object
+    o.data.materials.clear()
+    o.data.materials.append(mat)
+    if side == 0:
+        o.rotation_euler = (0, 0, rot_z)
+    elif side > 0:
+        o.rotation_euler = (math.pi / 2, 0, math.pi)
+    else:
+        o.rotation_euler = (math.pi / 2, 0, 0)
+    bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
+    return o
+
+
+def top_of(shapes, x, y):
+    zs = [z for z in (surface_z(s, x, y) for s in shapes) if z is not None]
+    return max(zs) if zs else 0.5
+
+
+def flat_on(o, shapes, x, y, lift):
+    """Seat a flat decal on the highest surface at (x, y), pitched to its slope."""
+    z = top_of(shapes, x, y)
+    pitch = math.atan2(top_of(shapes, x + 0.15, y) - top_of(shapes, x - 0.15, y), 0.3)
+    o.location = (x, y, z + lift)
+    o.rotation_euler = (0, -pitch, 0)
+
+
+def livery(m, body, cabin, roof_x, bonnet_x, door_x, door_z, number, sponsor, ink, bands=()):
+    """Sponsor bands, race numbers on roof and doors, sponsor names on bonnet and flanks."""
+    ink_m = material("ink", ink, rough=0.4)
+    for k, (y0, y1, colour) in enumerate(bands):
+        decal(f"band{k}", [body, cabin], -2.1, 2.1, y0, y1, material(f"band{k}", colour, rough=0.32), lift=0.02 + 0.002 * k, across=2)
+    # Roof roundel and number, readable from behind the car.
+    disc = cyl("roof-disc", (0, 0, 0), 0.27, 0.01, m["white"], axis="Z", verts=28)
+    flat_on(disc, [cabin], roof_x, 0, 0.03)
+    num = text_mesh("roof-num", number, 0.34, ink_m, rot_z=-math.pi / 2)
+    flat_on(num, [cabin], roof_x, 0, 0.037)
+    # Sponsor across the bonnet.
+    name = text_mesh("bonnet-name", sponsor, 0.2, ink_m, rot_z=-math.pi / 2)
+    flat_on(name, [body], bonnet_x, 0, 0.03)
+    for s in (-1, 1):
+        hw = body(door_x)[0]
+        num = text_mesh(f"door-num{s}", number, 0.22, ink_m, side=s)
+        num.location = (door_x, s * (hw + 0.02), door_z)
+        flank = text_mesh(f"flank{s}", sponsor, 0.13, ink_m, side=s)
+        flank.location = (door_x - 0.95, s * (body(door_x - 0.95)[0] + 0.012), door_z - 0.12)
+
+
 def palette(paint, stripe, roof):
     return dict(
         paint=material("paint", paint, rough=0.28, metal=0.1),
@@ -160,8 +222,8 @@ def wheels(m, front, rear, track, radius, width, rim_style="disc"):
     for x in (front, rear):
         for s in (-1, 1):
             y = s * track
-            cyl(f"tyre{x}{s}", (x, y, radius), radius, width, m["tyre"], verts=24)
-            cyl(f"rim{x}{s}", (x, y + s * (width / 2 + 0.002), radius), radius * 0.66, 0.012, m["rim"], verts=20)
+            cyl(f"tyre{x}{s}", (x, y, radius), radius, width, m["tyre"], verts=14)
+            cyl(f"rim{x}{s}", (x, y + s * (width / 2 + 0.002), radius), radius * 0.66, 0.012, m["rim"], verts=12)
             cyl(f"hub{x}{s}", (x, y + s * (width / 2 + 0.008), radius), radius * 0.2, 0.012, m["hub"], verts=10)
             if rim_style == "fuchs":
                 for k in range(5):
@@ -186,7 +248,7 @@ def finish(name, length):
 
 # --- Porsche 911 (1973 Carrera RS) -------------------------------------------
 
-def porsche(name, paint, stripe, roof):
+def porsche(name, paint, stripe, roof, number, sponsor, ink, bands=()):
     reset()
     m = palette(paint, stripe, roof)
     front, rear = 1.18, -1.12
@@ -225,6 +287,7 @@ def porsche(name, paint, stripe, roof):
         cyl(f"roundel{s}", (0.05, s * 0.84, 0.6), 0.16, 0.01, m["white"], verts=20)
     block("bumper-f", (2.05, 0, 0.38), (0.08, 1.3, 0.08), m["black"], bevel=0.02)
     block("bumper-r", (-2.08, 0, 0.42), (0.06, 1.3, 0.08), m["black"], bevel=0.02)
+    livery(m, body, cabin, -0.3, 1.45, 0.05, 0.6, number, sponsor, ink, bands)
     mirrors(m, 0.45, 0.82, 0.88)
     wheels(m, front, rear, 0.72, r, 0.24, rim_style="fuchs")
     finish(name, 4.16)
@@ -232,7 +295,7 @@ def porsche(name, paint, stripe, roof):
 
 # --- Lancia Stratos HF ---------------------------------------------------------
 
-def stratos(name, paint, stripe, roof):
+def stratos(name, paint, stripe, roof, number, sponsor, ink, bands=()):
     reset()
     m = palette(paint, stripe, roof)
     front, rear = 1.1, -1.05
@@ -274,6 +337,7 @@ def stratos(name, paint, stripe, roof):
     block("pod", (1.12, 0, 0.72), (0.12, 0.9, 0.16), m["black"], bevel=0.03)
     for y in (-0.33, -0.11, 0.11, 0.33):
         cyl(f"spot{y}", (1.19, y, 0.72), 0.075, 0.03, m["lamp"], axis="X", verts=16)
+    livery(m, body, cabin, -0.33, 0.85, 0.0, 0.55, number, sponsor, ink, bands)
     mirrors(m, 0.38, 0.84, 0.86)
     wheels(m, front, rear, 0.76, r, 0.26)
     finish(name, 3.71)
@@ -281,7 +345,7 @@ def stratos(name, paint, stripe, roof):
 
 # --- Ford Escort Mk1 RS ------------------------------------------------------
 
-def escort(name, paint, stripe, roof):
+def escort(name, paint, stripe, roof, number, sponsor, ink, bands=()):
     reset()
     m = palette(paint, stripe, roof)
     front, rear = 1.22, -1.18
@@ -323,17 +387,23 @@ def escort(name, paint, stripe, roof):
         cyl(f"spot{y}", (2.12, y, 0.56), 0.085, 0.07, m["black"], axis="X", verts=16)
         cyl(f"glass{y}", (2.16, y, 0.56), 0.07, 0.02, m["lamp"], axis="X", verts=16)
     block("vent", (-0.1, 0, 1.36), (0.3, 0.3, 0.05), m["black"], bevel=0.02)
+    livery(m, body, cabin, -0.25, 1.35, -0.1, 0.52, number, sponsor, ink, bands)
     mirrors(m, 0.55, 0.8, 0.9)
     wheels(m, front, rear, 0.7, r, 0.24)
     finish(name, 4.0)
 
 
 os.makedirs(OUT, exist_ok=True)
-# Grid order (game's DRIVERS): Juno, Mika, Rook, Ayla, You, Vex.
-porsche("car-0", 0x22252B, 0xD4A93A, 0x22252B)   # Juno: black and gold 911
-stratos("car-1", 0x7B45C8, 0xF4F1EA, 0xF4F1EA)   # Mika: purple Stratos
-escort("car-2", 0xF4F1EA, 0xE8742A, 0xF4F1EA)    # Rook: white Escort, orange stripe
-escort("car-3", 0x3FA7D6, 0xF4F1EA, 0x1E4F80)    # Ayla: blue Escort
-porsche("car-4", 0xF2C230, 0x22252B, 0xF2C230)   # You: yellow 911, black stripes
-stratos("car-5", 0xF4F1EA, 0xD83A2E, 0xF4F1EA)   # Vex: white Stratos, red sweep
+# Grid order (game's DRIVERS): Juno, Mika, Rook, Ayla, You, Vex. The sponsors are invented.
+porsche("car-0", 0x22252B, 0xD4A93A, 0x22252B, "1", "AURUM", 0xD4A93A)            # Juno: black and gold
+stratos("car-1", 0x7B45C8, 0xF4F1EA, 0xF4F1EA, "4", "NOVA", 0x22252B,
+        bands=[(0.32, 0.4, 0xF2C230)])                                           # Mika: purple, white sweep
+escort("car-2", 0xF4F1EA, 0xE8742A, 0xF4F1EA, "22", "CASTELLO", 0x1F7A3A,
+       bands=[(0.26, 0.34, 0xD83A2E), (0.36, 0.42, 0x1F7A3A)])                  # Rook: white, red/green/orange
+escort("car-3", 0x3FA7D6, 0xF4F1EA, 0x1E4F80, "9", "MARINA", 0x1E2A44,
+       bands=[(-0.42, -0.34, 0x1E4F80), (-0.32, -0.26, 0xD83A2E)])              # Ayla: Martini-ish blues and red
+porsche("car-4", 0xF2C230, 0x22252B, 0xF2C230, "7", "VELOX", 0x22252B,
+        bands=[(-0.45, -0.38, 0xD83A2E), (0.38, 0.45, 0xD83A2E)])               # You: yellow, black and red
+stratos("car-5", 0xF4F1EA, 0xD83A2E, 0xF4F1EA, "12", "ALTIVA", 0x1F7A3A,
+        bands=[(-0.36, -0.31, 0x1F7A3A)])                                         # Vex: Alitalia-style
 print("cars written to", OUT)

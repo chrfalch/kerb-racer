@@ -211,21 +211,28 @@ def conifer(name, seed, height, needles_path):
     bark = material("bark", 0x4A3220, rough=0.95)
     trunk("trunk", height * 0.75, 0.22 * height / 8, 0.05, bark)
     mat = cutout("needles", needles_path)
+    # An opaque core inside the branches: it hides the cards behind it, so the
+    # GPU rejects them by depth instead of shading layer after layer of needles.
+    core = material("core", 0x2B5226, rough=0.95)
+    bpy.ops.mesh.primitive_cone_add(vertices=6, radius1=height * 0.12, radius2=0.0, depth=height * 0.6,
+                                    location=(0, 0, height * 0.25 + height * 0.3))
+    bpy.context.active_object.data.materials.append(core)
     cards = Cards("crown", mat, (0, 0, height * 0.45), (1, 1, 1.6))
-    whorls = int(height * 2.2)
+    # Few, broad branches: overdraw, not triangles, is what foliage costs.
+    whorls = int(height * 1.1)
     for k in range(whorls):
         t = k / (whorls - 1)
-        z = height * (0.18 + 0.8 * t)
-        reach = (1 - t) ** 0.95 * height * 0.33 + 0.35
-        n = max(5, int(9 - 4 * t))
+        z = height * (0.2 + 0.78 * t)
+        reach = (1 - t) ** 0.95 * height * 0.34 + 0.45
+        n = max(5, int(8 - 3 * t))
         twist = rng.uniform(0, math.tau)
         for j in range(n):
             a = twist + j * math.tau / n + rng.uniform(-0.25, 0.25)
             out = Vector((math.cos(a), math.sin(a), rng.uniform(-0.05, 0.25)))
-            # Each branch: two cards, one flat and one tilted, for volume from every angle.
-            for tilt in (0.0, 0.9):
-                up = Vector((0, 0, 1)).lerp(Vector((-math.sin(a), math.cos(a), 0)), tilt).normalized()
-                cards.card(Vector((0, 0, z)), out, up, reach * rng.uniform(0.85, 1.1), reach * 0.75, droop=reach * 0.35)
+            # One card per branch, alternately flat and tilted, for volume from every angle.
+            tilt = 0.8 if (j + k) % 2 else 0.1
+            up = Vector((0, 0, 1)).lerp(Vector((-math.sin(a), math.cos(a), 0)), tilt).normalized()
+            cards.card(Vector((0, 0, z)), out, up, reach * rng.uniform(0.9, 1.1), reach * 1.05, droop=reach * 0.35, segments=2)
     # The leader: crossed vertical cards.
     for a in (0, math.pi / 2):
         d = Vector((math.cos(a), math.sin(a), 0))
@@ -282,7 +289,7 @@ def jitter(obj, amount, seed):
         v.co += Vector((r.uniform(-amount, amount), r.uniform(-amount, amount), r.uniform(-amount * 0.5, amount * 0.5)))
 
 
-def box(name, at, size, mat, rot=(0, 0, 0), bevel=0.02):
+def box(name, at, size, mat, rot=(0, 0, 0), bevel=0.0):
     bpy.ops.mesh.primitive_cube_add(size=1, location=at, rotation=rot)
     o = bpy.context.active_object
     o.name = name
@@ -309,19 +316,14 @@ def mushrooms(name):
     reset()
     cap = material("cap", 0xC8282A, rough=0.5)
     stem = material("stem", 0xEFE6D2, rough=0.8)
-    spot = material("spot", 0xFFFFFF, rough=0.6)
     for k, (x, y, s) in enumerate([(0, 0, 1.0), (0.22, 0.12, 0.7), (-0.15, 0.2, 0.55)]):
-        cylinder(f"stem{k}", (x, y, 0.09 * s), 0.035 * s, 0.18 * s, stem)
-        bpy.ops.mesh.primitive_uv_sphere_add(segments=14, ring_count=8, radius=0.1 * s, location=(x, y, 0.18 * s))
+        cylinder(f"stem{k}", (x, y, 0.09 * s), 0.035 * s, 0.18 * s, stem, verts=6)
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=8, ring_count=4, radius=0.1 * s, location=(x, y, 0.18 * s))
         c = bpy.context.active_object
         c.scale.z = 0.6
         c.data.materials.append(cap)
         for p in c.data.polygons:
             p.use_smooth = True
-        for a in range(4):
-            bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=0.014 * s,
-                                                  location=(x + math.cos(a * 1.7) * 0.05 * s, y + math.sin(a * 1.7) * 0.05 * s, 0.225 * s))
-            bpy.context.active_object.data.materials.append(spot)
     export(name)
 
 

@@ -132,3 +132,29 @@ fn saves_restore_and_continue_identically() {
     other.run(2000.0);
     assert_eq!(game.world().hash(), other.world().hash());
 }
+
+#[test]
+fn scenery_budget() {
+    for id in 0..3 {
+        let game = race(id);
+        let w = game.world();
+        let mut counts = std::collections::BTreeMap::new();
+        for (_, mesh) in w.query::<&exact_game::Mesh>().iter() {
+            if let exact_game::Mesh::Asset(name) = mesh {
+                *counts.entry(name.clone()).or_insert(0) += 1;
+            }
+        }
+        println!("{id}: {counts:?}");
+        // Foliage overdraw is the frame's main cost: keep the woods to what the camera sees.
+        let trees: u32 = [
+            "pine-a.model",
+            "pine-b.model",
+            "pine-c.model",
+            "tree-a.model",
+        ]
+        .iter()
+        .map(|m| counts.get(*m).copied().unwrap_or(0))
+        .sum();
+        assert!(trees < 300, "{trees} trees on track {id}");
+    }
+}

@@ -15,6 +15,8 @@ pub struct Options {
     /// Which circuit: 0 Pine Hollow, 1 Fern Loop, 2 Kerb Ring.
     pub track: u32,
     pub laps: u32,
+    /// Graphics: 0 low (no shadows, fewer props), 1 medium (sun shadows), 2 high (haze and bloom too).
+    pub quality: u32,
     #[live]
     pub paused: bool,
     #[restart]
@@ -26,6 +28,7 @@ impl Default for Options {
             seed: 7,
             track: 0,
             laps: 3,
+            quality: 1,
             paused: false,
             restart: false,
         }
@@ -177,6 +180,9 @@ impl Game for KerbRacers {
             .button_touch("brake", Region::Left)
     }
     fn validate(args: &Options) -> Result<(), String> {
+        if args.quality > 2 {
+            return Err(format!("quality is 0, 1 or 2, not {}", args.quality));
+        }
         if args.laps == 0 || args.laps > 20 {
             return Err(format!("laps must be 1 to 20, not {}", args.laps));
         }
@@ -185,7 +191,7 @@ impl Game for KerbRacers {
     fn setup(w: &mut World, args: &Options) {
         w.reseed(args.seed);
         let t = track::build(args.track % track::LAYOUTS.len() as u32);
-        light(w);
+        light(w, args.quality);
         let id = t.id;
         let ground = w
             .generated_model(&format!("ground-{id}.model"), scenery::ground(&t))
@@ -200,7 +206,7 @@ impl Game for KerbRacers {
             .generated(&format!("flowers-{id}.model"), flowers)
             .expect("flowers");
         w.spawn_named("flowers", (Transform::default(), flowers, Ambient));
-        for prop in scenery::props(w, &t) {
+        for prop in scenery::props(w, &t, args.quality) {
             w.spawn((
                 Transform {
                     position: Vec3::new(prop.at.x, 0.0, prop.at.y),
@@ -208,6 +214,11 @@ impl Game for KerbRacers {
                     scale: prop.scale,
                 },
                 Mesh::asset(prop.model),
+                // Nothing further than this from the camera can be on screen.
+                ModelLod {
+                    levels: Vec::new(),
+                    hide: Some(72.0),
+                },
                 Ambient,
             ));
         }
@@ -241,6 +252,7 @@ impl Game for KerbRacers {
                     },
                 ),
             );
+            puffs(w, e, &name_of(k));
             if k == PLAYER {
                 let marker = w
                     .generated("marker.model", scenery::marker())
@@ -371,13 +383,70 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
         pose.position = Vec3::new(body.p.x, 0.0, body.p.y);
         pose.rotation = Quat::from_rotation_y(-body.car.heading);
         drop(pose);
+        let speed = Vec2::new(body.car.vx, body.car.vz).length();
+        let name = name_of(body.car.id);
+        let smoke = body.car.sliding && body.car.surface != car::GRASS && speed > 5.0;
+        let dust = body.car.surface != car::ASPHALT && speed > 3.0;
+        for (suffix, on) in [("smoke", smoke), ("dust", dust)] {
+            let target = format!("{name}-{suffix}");
+            // Read first: a mutable borrow marks the row written even when nothing changes.
+            if w.require::<Emitter>(target.as_str()).running != on {
+                w.require_mut::<Emitter>(target.as_str()).running = on;
+            }
+        }
         *w.require_mut::<Car>(*e) = body.car;
+    }
+}
+
+/// Two trails behind each car: white tyre smoke for a slide on the road,
+/// brown dust off it. Both stay where they were born and start switched off.
+fn puffs(w: &mut World, car: Entity, name: &str) {
+    for (suffix, birth, death, size) in [
+        (
+            "smoke",
+            [0.92, 0.92, 0.9, 0.5],
+            [0.85, 0.85, 0.85, 0.0],
+            [0.7, 2.6],
+        ),
+        (
+            "dust",
+            [0.62, 0.45, 0.28, 0.65],
+            [0.66, 0.55, 0.4, 0.0],
+            [0.8, 3.2],
+        ),
+    ] {
+        w.spawn_named(
+            format!("{name}-{suffix}"),
+            (
+                Transform::at(-1.5, 0.25, 0.0),
+                Emitter {
+                    shape: emitter::Shape::Sphere(0.35),
+                    rate: 22.0,
+                    lifetime: 1.3,
+                    speed: 0.8,
+                    spread: 1.3,
+                    gravity: Vec3::new(0.0, 0.7, 0.0),
+                    drag: 1.8,
+                    size,
+                    color: [birth, death],
+                    ease: emitter::Ease::Smooth,
+                    seed: car.index() as u64 * 2 + (suffix == "dust") as u64,
+                    bound: [-6.0, -1.0, -6.0, 6.0, 4.0, 6.0],
+                    additive: false,
+                    running: false,
+                    ..Emitter::default()
+                },
+                emitter::WorldSpace::default(),
+                Parent(car),
+                Ambient,
+            ),
+        );
     }
 }
 
 /// A low, late-afternoon sun from the west: long shadows across the road,
 /// warm light on everything facing it, cool sky in the shade, a golden haze.
-fn light(w: &mut World) {
+fn light(w: &mut World, quality: u32) {
     w.insert_resource(Environment {
         background: Some([0.42, 0.36, 0.22]),
         zenith: [0.22, 0.34, 0.55],
@@ -386,11 +455,12 @@ fn light(w: &mut World) {
         ambient: 0.55,
         sun_disc: 0.0,
         exposure: 1.05,
-        fog: Some(Fog {
+        // The golden haze and bloom are full-screen passes: high quality only.
+        fog: (quality >= 2).then_some(Fog {
             color: Some([0.95, 0.74, 0.48]),
             ..Fog::new(0.006, 0.12)
         }),
-        bloom: Some(Bloom {
+        bloom: (quality >= 2).then_some(Bloom {
             threshold: 0.85,
             intensity: 0.28,
             radius: 2.0,
@@ -403,7 +473,7 @@ fn light(w: &mut World) {
             DirectionalLight {
                 color: [1.0, 0.72, 0.45],
                 illuminance: 26000.0,
-                shadows: true,
+                shadows: quality >= 1,
             },
         ),
     );

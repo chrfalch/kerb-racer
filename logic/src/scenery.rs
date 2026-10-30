@@ -417,7 +417,7 @@ pub struct Prop {
 }
 
 /// Fence sections along both fence lines, then trees, bushes and rocks beyond them.
-pub fn props(w: &World, t: &Track) -> Vec<Prop> {
+pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
     let mut out = Vec::new();
     let n = t.len();
     for s in [-1.0f32, 1.0] {
@@ -443,10 +443,13 @@ pub fn props(w: &World, t: &Track) -> Vec<Prop> {
         placed.iter().all(|(q, s)| (*q - p).length() >= r + s)
     };
     // Woods: conifers crowd up to the fences, the odd broadleaf among them.
-    for _ in 0..2600 {
+    // Low quality keeps the fences and a thinner wood, and skips the undergrowth.
+    let (trees, undergrowth) = if quality == 0 { (700, 0) } else { (1800, 1400) };
+    for _ in 0..trees {
         let p = Vec2::new(w.rand(cx - 95.0..cx + 95.0), w.rand(cz - 82.0..cz + 82.0));
         let clear = clearance(t, p);
-        if clear < WALL + 1.6 {
+        // Only where the camera can see: it never strays more than ~30 m from the road.
+        if !(WALL + 1.6..34.0).contains(&clear) {
             continue;
         }
         let (model, radius) = *w
@@ -472,10 +475,10 @@ pub fn props(w: &World, t: &Track) -> Vec<Prop> {
         });
     }
     // Undergrowth on the grass between the verge and the fences, and in the infield.
-    for _ in 0..1400 {
+    for _ in 0..undergrowth {
         let p = Vec2::new(w.rand(cx - 80.0..cx + 80.0), w.rand(cz - 70.0..cz + 70.0));
         let clear = clearance(t, p);
-        if clear < HALF + RUNOFF + 1.8 {
+        if !(HALF + RUNOFF + 1.8..30.0).contains(&clear) {
             continue;
         }
         let (model, radius) = *w
