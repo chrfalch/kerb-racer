@@ -1,5 +1,60 @@
 # Kerb Racers
 
+## Building
+
+Kerb Racers is an [Exact](https://github.com/ccheever/exact2) game. It needs an
+exact2 checkout next to this one (`../exact2`), or set `EXACT2=/path/to/exact2`.
+Run `bun ../exact2/scripts/exact.mjs setup --check` to list anything this machine
+is missing (Rust toolchain, Bun, Xcode, Binaryen).
+
+```sh
+bun exact.mjs test-rust     # hostless Rust tests and determinism lints
+bun exact.mjs web           # web dev loop, at the URL it prints
+bun exact.mjs mac --run     # macOS app
+bun exact.mjs ios --run     # iOS simulator
+```
+
+### iOS release build on a phone
+
+The Rust library builds with the release profile. The app is signed with a
+development identity and installed with `devicectl`.
+
+Before the first build:
+
+1. Install Xcode, then run `sudo xcodebuild -runFirstLaunch` once.
+2. Sign in under Xcode → Settings → Accounts, so this Mac has an Apple
+   Development certificate (`security find-identity -v -p codesigning` lists it).
+3. Get a provisioning profile that covers the phone's UDID and the app's bundle
+   id. To get one from Xcode, open any project with that bundle id once, with
+   automatic signing turned on.
+4. Connect the phone, unlock it, trust this Mac, and turn on Developer Mode
+   (Settings → Privacy & Security). `xcrun devicectl list devices` should list it.
+
+Then:
+
+```sh
+bun exact.mjs ios --device --run                       # build, install and launch
+bun exact.mjs ios --device --run --phone "<name|udid>" # pick a phone when several are paired
+EXACT_UPDATE_TRUST=production bun exact.mjs ios --device --run  # accept signed updates only
+```
+
+The identity and profile are chosen automatically. To choose them yourself, set
+`EXACT_IDENTITY` (the certificate's SHA-1) and `EXACT_PROFILE` (a path to a
+`.mobileprovision`).
+
+To make an `.ipa` for distribution (ad hoc or TestFlight) instead of installing
+on a connected phone:
+
+```sh
+EXACT_IDENTITY=<sha1> EXACT_PROFILE=<path.mobileprovision> \
+  bun exact.mjs ios --device --archive out/KerbRacers.ipa
+```
+
+`--unsigned` doesn't work for this game. It has GPU modules, and re-signing the
+app would invalidate their baked digests.
+
+## Proofs
+
 `bun proof.mjs` verifies gameplay, Contract text/accessibility and saves on the GPU-less Linux host. `bun proof.mjs web` adds pixels. First run `bun '../exact2/game/prove.mjs' .` to fill empty pins after every mode and host agrees; accept later intentional changes with `--repin`.
 
 Rust hostless tests read simulation time with `sim.world().now()` and save with
