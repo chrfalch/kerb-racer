@@ -5,5 +5,3 @@
 /.shells/
 /app.contract.d.ts
 /.exact/
-dist/
-artifacts/
