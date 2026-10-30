@@ -17,6 +17,12 @@ pub const GRIP_RUNOFF: f32 = 12.0;
 pub const GRIP_GRASS: f32 = 7.5;
 /// The most the body may point away from where it is going.
 pub const MAX_SLIP: f32 = 0.42;
+/// How fast (1/s) the tyres straighten a sideways slide while under their
+/// grip. Lower lets the tail hang out further in a corner: the nose turns in
+/// and the car drifts through at a steady angle of about yaw / DRIFT.
+pub const DRIFT: f32 = 7.0;
+/// Sideways speed (m/s) past which the tyres smoke and scrub.
+pub const SLIDE: f32 = 3.0;
 /// Collision circles: two per car, fore and aft.
 pub const BODY_R: f32 = 0.86;
 pub const BODY_OFFSET: f32 = 0.72;
@@ -205,7 +211,9 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     // Steering: pure pursuit toward the aim point, limited by the wheels.
     let ahead = 4.5 + 0.32 * speed;
     let target = aim(track, &body.car, ahead) - body.p;
-    let f = body.forward();
+    // Aim along where the car is going, not where its nose points, so a
+    // drift doesn't fool the steering into running wide.
+    let f = if speed > 1.0 { body.v() / speed } else { body.forward() };
     let along = target.dot(f);
     let across = f.perp_dot(target);
     let alpha = math::atan2(across, along.max(0.01));
@@ -242,12 +250,13 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
         _ => {}
     }
     vf = vf.max(0.0);
-    // Tyres pull the sideways velocity out up to their grip; past it, slide.
-    let pull = grip * dt;
-    body.car.sliding = vl.abs() > pull * 6.0;
+    // Tyres pull the sideways velocity out, gently while it is small (the
+    // drift) and up to their grip when it is large; past that, slide.
+    let pull = (vl.abs() * DRIFT).min(grip) * dt;
+    body.car.sliding = vl.abs() > SLIDE;
     if body.car.sliding {
         // A sliding tyre scrubs speed.
-        vf -= (vl.abs() * 0.35 * dt).min(vf);
+        vf -= ((vl.abs() - SLIDE) * 0.35 * dt).min(vf);
     }
     vl -= vl.clamp(-pull, pull);
     let v = f * vf + l * vl;
