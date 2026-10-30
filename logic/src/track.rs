@@ -215,7 +215,11 @@ pub fn build(id: u32) -> Track {
     centre.rotate_left((layout(id).start / step).round() as usize % n);
     // Left of travel: the tangent turned a quarter anticlockwise in (x, z).
     let normals: Vec<Vec2> = (0..n)
-        .map(|i| (centre[(i + 1) % n] - centre[(i + n - 1) % n]).normalize().perp())
+        .map(|i| {
+            (centre[(i + 1) % n] - centre[(i + n - 1) % n])
+                .normalize()
+                .perp()
+        })
         .collect();
     let bend: Vec<f32> = (0..n)
         .map(|i| {

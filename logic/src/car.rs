@@ -286,7 +286,7 @@ pub fn collide(bodies: &mut [Body]) {
                     let pb = bodies[b].p + bodies[b].forward() * BODY_OFFSET * sb;
                     let d = pb - pa;
                     let dist = d.length();
-                    if dist >= 2.0 * BODY_R || dist < 1e-4 {
+                    if !(1e-4..2.0 * BODY_R).contains(&dist) {
                         continue;
                     }
                     let n = d / dist;

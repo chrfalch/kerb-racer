@@ -144,6 +144,30 @@ pub struct KerbRacers;
 impl Game for KerbRacers {
     const ID: &'static str = "kerb-racers";
     const HZ: u32 = 120;
+    /// The Blender models and ground textures: shown as they land, never read by the simulation.
+    const STREAMED: &'static [&'static str] = &[
+        "car-0.model",
+        "car-1.model",
+        "car-2.model",
+        "car-3.model",
+        "car-4.model",
+        "car-5.model",
+        "pine-a.model",
+        "pine-b.model",
+        "pine-c.model",
+        "tree-a.model",
+        "bush.model",
+        "fern.model",
+        "daisies.model",
+        "mushrooms.model",
+        "logs.model",
+        "stump.model",
+        "rock.model",
+        "fence.model",
+        "asphalt.tex",
+        "grass.tex",
+        "clay.tex",
+    ];
     type Args = Options;
     fn actions() -> Actions {
         Actions::new()
@@ -161,45 +185,42 @@ impl Game for KerbRacers {
     fn setup(w: &mut World, args: &Options) {
         w.reseed(args.seed);
         let t = track::build(args.track % track::LAYOUTS.len() as u32);
-        w.insert_resource(Environment {
-            background: Some([0.16, 0.27, 0.12]),
-            ambient: 0.65,
-            exposure: 0.95,
-            fog: None,
-            ..Environment::default()
-        });
+        light(w);
         let id = t.id;
-        let ground = w.generated(&format!("ground-{id}.model"), scenery::ground(&t)).expect("ground");
+        let ground = w
+            .generated_model(&format!("ground-{id}.model"), scenery::ground(&t))
+            .expect("ground");
         w.spawn_named("ground", (Transform::default(), ground));
-        let road = w.generated(&format!("road-{id}.model"), scenery::road(&t)).expect("road");
+        let road = w
+            .generated_model(&format!("road-{id}.model"), scenery::road(&t))
+            .expect("road");
         w.spawn_named("road", (Transform::default(), road));
-        let woods = scenery::woods(w, &t);
-        let woods = w.generated(&format!("woods-{id}.model"), woods).expect("woods");
-        w.spawn_named("woods", (Transform::default(), woods));
-        // A low, warm late-afternoon sun for long shadows.
-        w.spawn_named(
-            "sun",
-            (
-                Transform::at(-30.0, 40.0, 35.0).looking_at(Vec3::ZERO, Vec3::Y),
-                DirectionalLight {
-                    color: [1.0, 0.86, 0.66],
-                    illuminance: 11000.0,
-                    shadows: true,
+        let flowers = scenery::flowers(w, &t);
+        let flowers = w
+            .generated(&format!("flowers-{id}.model"), flowers)
+            .expect("flowers");
+        w.spawn_named("flowers", (Transform::default(), flowers, Ambient));
+        for prop in scenery::props(w, &t) {
+            w.spawn((
+                Transform {
+                    position: Vec3::new(prop.at.x, 0.0, prop.at.y),
+                    rotation: Quat::from_rotation_y(-prop.yaw),
+                    scale: prop.scale,
                 },
-            ),
-        );
+                Mesh::asset(prop.model),
+                Ambient,
+            ));
+        }
         for (k, d) in DRIVERS.iter().enumerate() {
             let k = k as u32;
             let row = k / 2;
             let behind = 5.0 + 6.0 * row as f32 + 3.0 * (k % 2) as f32;
             let idx = t.wrap(-((behind / t.step) as i64));
-            let side = if k % 2 == 0 { 1.9 } else { -1.9 };
+            let side = if k.is_multiple_of(2) { 1.9 } else { -1.9 };
             let p = t.at(idx, side);
             let f = t.tangent(idx);
             let heading = math::atan2(f.y, f.x);
-            let model = w
-                .generated(&format!("car-{k}.model"), scenery::car(d.paint, d.trim))
-                .expect("car");
+            let model = Mesh::asset(format!("car-{k}.model"));
             let e = w.spawn_named(
                 name_of(k),
                 (
@@ -221,15 +242,17 @@ impl Game for KerbRacers {
                 ),
             );
             if k == PLAYER {
-                let marker = w.generated("marker.model", scenery::marker()).expect("marker");
+                let marker = w
+                    .generated("marker.model", scenery::marker())
+                    .expect("marker");
                 w.spawn_named(
                     "marker",
                     (
-                        Transform::at(0.0, 2.4, 0.0),
+                        Transform::at(0.0, 2.6, 0.0),
                         marker,
                         Material {
                             color: [1.0, 1.0, 1.0, 1.0],
-                            ..Material::glow([2.4, 1.9, 0.5])
+                            ..Material::glow([0.9, 0.7, 0.2])
                         },
                         Parent(e),
                     ),
@@ -245,7 +268,16 @@ impl Game for KerbRacers {
             focus_z: start.y,
         });
         w.insert_resource(t);
-        w.spawn_named("camera", (Transform::default(), Camera { fov_y_degrees: 36.0, ..Camera::default() }));
+        w.spawn_named(
+            "camera",
+            (
+                Transform::default(),
+                Camera {
+                    fov_y_degrees: 36.0,
+                    ..Camera::default()
+                },
+            ),
+        );
         camera(w, true);
         hud(w);
     }
@@ -298,7 +330,11 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
             car::drive(&t, body, caps[k]);
         } else {
             body.car.brake = input.held("brake");
-            body.car.gas = if input.held("gas") && !body.car.brake { 1.0 } else { 0.0 };
+            body.car.gas = if input.held("gas") && !body.car.brake {
+                1.0
+            } else {
+                0.0
+            };
         }
         if now == start {
             body.car.lap_tick = start;
@@ -318,7 +354,11 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
                 let mut race = w.resource_mut::<Race>();
                 race.order.push(body.car.id);
                 drop(race);
-                w.emit(if body.car.id == PLAYER { "finished" } else { "rival-finished" });
+                w.emit(if body.car.id == PLAYER {
+                    "finished"
+                } else {
+                    "rival-finished"
+                });
             }
         }
     }
@@ -335,12 +375,61 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
     }
 }
 
+/// A low, late-afternoon sun from the west: long shadows across the road,
+/// warm light on everything facing it, cool sky in the shade, a golden haze.
+fn light(w: &mut World) {
+    w.insert_resource(Environment {
+        background: Some([0.42, 0.36, 0.22]),
+        zenith: [0.22, 0.34, 0.55],
+        horizon: [0.95, 0.72, 0.45],
+        ground: [0.10, 0.09, 0.05],
+        ambient: 0.55,
+        sun_disc: 0.0,
+        exposure: 1.05,
+        fog: Some(Fog {
+            color: Some([0.95, 0.74, 0.48]),
+            ..Fog::new(0.006, 0.12)
+        }),
+        bloom: Some(Bloom {
+            threshold: 0.85,
+            intensity: 0.28,
+            radius: 2.0,
+        }),
+    });
+    w.spawn_named(
+        "sun",
+        (
+            Transform::at(-70.0, 24.0, -28.0).looking_at(Vec3::ZERO, Vec3::Y),
+            DirectionalLight {
+                color: [1.0, 0.72, 0.45],
+                illuminance: 26000.0,
+                shadows: true,
+            },
+        ),
+    );
+    // Skylight from the other side, so shadows stay blue rather than black.
+    w.spawn_named(
+        "sky",
+        (
+            Transform::at(40.0, 60.0, 30.0).looking_at(Vec3::ZERO, Vec3::Y),
+            DirectionalLight {
+                color: [0.55, 0.68, 1.0],
+                illuminance: 2500.0,
+                shadows: false,
+            },
+        ),
+    );
+}
+
 /// Ease the camera's focus toward a point ahead of the player.
 fn camera(w: &mut World, snap: bool) {
     let (p, v) = {
         let pose = w.require::<Transform>("player");
         let car = w.require::<Car>("player");
-        (Vec2::new(pose.position.x, pose.position.z), Vec2::new(car.vx, car.vz))
+        (
+            Vec2::new(pose.position.x, pose.position.z),
+            Vec2::new(car.vx, car.vz),
+        )
     };
     let target = p + v * 0.35;
     let dt = w.dt();
@@ -352,7 +441,7 @@ fn camera(w: &mut World, snap: bool) {
         Vec3::new(race.focus_x, 0.0, race.focus_z)
     };
     let mut cam = w.require_mut::<Transform>("camera");
-    *cam = Transform::at(focus.x, 46.0, focus.z + 34.0).looking_at(focus, Vec3::Y);
+    *cam = Transform::at(focus.x, 33.0, focus.z + 24.0).looking_at(focus, Vec3::Y);
 }
 
 /// Places: finishers in order, then everyone else by distance raced.
@@ -396,7 +485,11 @@ fn hud(w: &World) {
     drop(t);
     let order = standings(w);
     let player = w.require::<Car>("player").clone();
-    let place = order.iter().position(|(id, _, _)| *id == PLAYER).unwrap_or(0) as u32 + 1;
+    let place = order
+        .iter()
+        .position(|(id, _, _)| *id == PLAYER)
+        .unwrap_or(0) as u32
+        + 1;
     let phase = if now < race.start {
         "grid"
     } else if player.finished {
