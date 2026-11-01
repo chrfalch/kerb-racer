@@ -1,0 +1,15 @@
+{
+  "fill": { "solid": "srgb:0.33333,0.34118,0.36078,1.00000" },
+  "groups": [
+    {
+      "layers": [{ "image-name": "car.png", "name": "Car", "glass": false }],
+      "shadow": { "kind": "neutral", "opacity": 0.5 }
+    },
+    {
+      "layers": [{ "image-name": "track.png", "name": "Track", "glass": false }],
+      "shadow": { "kind": "none", "opacity": 0 },
+      "specular": false
+    }
+  ],
+  "supported-platforms": { "squares": "shared" }
+}
