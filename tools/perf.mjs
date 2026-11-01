@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // A wall-clock performance probe for the running game, the way a player sees it:
-//   bun tools/perf.mjs <url> [--headful] [--quality 0|1|2] [--dpr 2] [--seconds 6] [--size WxH] [--wait ms] [--shot out.png]
+//   bun tools/perf.mjs <url> [--headful] [--dpr 2] [--seconds 6] [--size WxH] [--wait ms] [--shot out.png]
 // Opens Chrome on the page, starts a race, then reports presented frames per
 // second (requestAnimationFrame), the main thread's busy share, the GPU adapter
 // and the hottest functions of a CPU profile.
@@ -13,7 +13,6 @@ const args = process.argv.slice(2);
 const url = args.find(a => !a.startsWith('--') && !/^\d+$/.test(a)) ?? 'http://127.0.0.1:8833/';
 const flag = (name, fallback) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : fallback; };
 const seconds = Number(flag('seconds', 6));
-const quality = flag('quality', null);
 const dpr = Number(flag('dpr', 1));
 const [width, height] = flag('size', '1280x800').split('x').map(Number);
 const chrome = process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -43,8 +42,7 @@ if (dpr !== 1) await send('Emulation.setDeviceMetricsOverride', { width, height,
 await send('Page.enable');
 await send('Page.navigate', { url });
 const click = (testId) => evaluate(`(() => { const el = document.querySelector('[data-testid="${testId}"]'); if (!el) return false; el.click(); return true; })()`);
-for (let i = 0; i < 100 && !(await click(quality != null ? `quality-${quality}` : 'play')); i++) await sleep(200);
-if (quality != null) await click('play');
+for (let i = 0; i < 100 && !(await click('play')); i++) await sleep(200);
 await sleep(Number(flag('wait', 4500))); // countdown, asset streaming, pipeline warm-up
 const adapter = await evaluate(`navigator.gpu?.requestAdapter().then(a => a ? JSON.stringify({vendor: a.info?.vendor, arch: a.info?.architecture, desc: a.info?.description}) : 'none')`);
 await send('Performance.enable');
@@ -60,7 +58,7 @@ const after = await metric();
 const gaps = frames.slice(1).map((t, i) => t - frames[i]).sort((a, b) => a - b);
 const q = p => gaps[Math.min(gaps.length - 1, Math.floor(p * gaps.length))].toFixed(1);
 const wall = (frames.at(-1) - frames[0]) / 1000;
-console.log(`url ${url}${quality != null ? ` quality ${quality}` : ''} ${width}x${height} dpr ${dpr} ${args.includes('--headful') ? 'headful' : 'headless'}`);
+console.log(`url ${url} ${width}x${height} dpr ${dpr} ${args.includes('--headful') ? 'headful' : 'headless'}`);
 console.log(`gpu ${adapter}`);
 console.log(`fps ${(gaps.length / wall).toFixed(1)} · frame p50 ${q(0.5)} ms p95 ${q(0.95)} ms max ${gaps.at(-1).toFixed(1)} ms`);
 const d = k => (after[k] - before[k]);

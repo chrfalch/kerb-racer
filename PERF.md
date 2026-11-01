@@ -3,11 +3,15 @@
 Measure with `tools/bench.mjs` (build first with `bun exact.mjs web-build`):
 
 ```sh
-bun tools/bench.mjs q0 q1 q2              # each quality in a fresh headful Chrome, vsync off
-bun tools/bench.mjs q2 --profile          # plus main-thread self time
+bun tools/bench.mjs q1                    # a fresh headful Chrome, vsync off
+bun tools/bench.mjs q1 --profile          # plus main-thread self time
 bun tools/bench.mjs q1 --vsync --shot out # what a player sees, and a screenshot
-bun tools/bench.mjs q2,t1 --json out.json # another track; results as JSON
+bun tools/bench.mjs q1,t1 --json out.json # another track; results as JSON
 ```
+
+The menu no longer offers a graphics setting: the game always races at Medium
+(`quality=1` on the canvas in `app.contract`). To measure Low or High, change
+that value, rebuild, and pass the matching `q0` or `q2` so the report is labelled.
 
 It reads the engine's own counters (`state.world.perf`: tick/feed/encode rings,
 draws, triangles, culling, and per-pass GPU timestamps when Chrome grants them)
