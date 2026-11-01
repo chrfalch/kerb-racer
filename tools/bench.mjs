@@ -1,13 +1,15 @@
 #!/usr/bin/env bun
-// Where a frame's time goes, per graphics quality, from the engine's own
+// Where a frame's time goes, from the engine's own
 // counters (state.world.perf: CPU tick/feed/encode rings, GPU timestamps per
 // pass, draws, triangles, culling) plus the page's requestAnimationFrame cadence.
 //
-//   bun tools/bench.mjs [q0 q1 q2 …] [--seconds 8] [--headless] [--vsync] [--dpr 2] [--size 1280x800]
+//   bun tools/bench.mjs [q1 q1,t1 …] [--seconds 8] [--headless] [--vsync] [--dpr 2] [--size 1280x800]
 //                       [--dist target/web-dist] [--json out.json] [--shot prefix] [--profile] [--raw]
 //
-// A scenario is `q<quality>` optionally followed by `,t<track>` (q2,t1). Each
-// runs in a fresh Chrome: pick the quality, press Race, hold the gas (the
+// A scenario is `q<quality>` optionally followed by `,t<track>` (q1,t1). The
+// menu always races at Medium (q1) now, so q only labels the report: to
+// measure Low or High, change `quality=1` on the canvas in app.contract,
+// rebuild, and pass the matching q0 or q2. Each runs in a fresh Chrome: pick the track, press Race, hold the gas (the
 // player drives the racing line), wait out the countdown and pipeline warm-up,
 // empty the rings, then sample for --seconds. Headless Chrome on macOS paces
 // frames at 80-120 ms whatever the work; run headful (the default) for numbers. Build first: `bun exact.mjs web-build`.
@@ -20,7 +22,7 @@ const args = process.argv.slice(2);
 const flag = (name, fallback) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : fallback; };
 const valued = new Set(['seconds', 'dpr', 'size', 'dist', 'json', 'warm', 'shot']);
 const scenarios = args.filter((a, i) => !a.startsWith('--') && !valued.has(args[i - 1]?.slice(2)));
-if (!scenarios.length) scenarios.push('q0', 'q1', 'q2');
+if (!scenarios.length) scenarios.push('q1');
 const seconds = Number(flag('seconds', 8));
 const warm = Number(flag('warm', 5000)); // countdown (3 s) and pipeline compiles
 const dpr = Number(flag('dpr', 2));
@@ -102,7 +104,6 @@ async function run(spec) {
       await sleep(250);
     };
     await click(`track-${track}`);
-    await click(`quality-${quality}`);
     await click('play');
     let s;
     while (Date.now() < deadline + 60000) {

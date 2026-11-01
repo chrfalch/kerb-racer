@@ -84,7 +84,6 @@ fn trackStart(n: number): string = n == 0 ? "translate(67.5 71) rotate(-3.4)" : 
 fn trackBlurb(n: number): string = n == 0 ? "S-bends in the pines" : n == 1 ? "Fast and flowing" : "Tight and technical"
 fn trackLevel(n: number): number = n == 0 ? 2 : n == 1 ? 1 : 3
 fn levelName(l: number): string = l == 1 ? "EASY" : l == 2 ? "MEDIUM" : "HARD"
-fn qualityName(q: number): string = q == 0 ? "Low" : q == 1 ? "Medium" : "High"
 
 // The backdrop's cars: the yellow one is yours, the rest are the five rivals.
 fn carColor(i: number): string = i == 0 ? "#f2c230" : i == 1 ? "#d83a2e" : i == 2 ? "#7b4bd1" : i == 3 ? "#fbf6e9" : i == 4 ? "#2f7fd1" : "#2b2e33"
@@ -144,7 +143,6 @@ keyframes light4
 component KerbRacers
   state playing = false
   state track = 0
-  state quality = 1
   state again = false
   state paused = false
   state hint = 0
@@ -153,9 +151,6 @@ component KerbRacers
 
   action pick(n: number)
     track = n
-
-  action detail(n: number)
-    quality = n
 
   action play
     paused = false
@@ -186,7 +181,7 @@ component KerbRacers
   view
     main viewport-fit="cover" width="100%" height="100%" background-color="#1d2b1a" color="#fbf6e9" font-family="system-ui"
       if playing
-        canvas surface=world(seed=7, track=track, laps=3, quality=quality, paused=(paused or (not started and hud.phase != "race" and hud.phase != "done")), restart=again) testId="world" width="100%" height="100%" position="relative" user-select="none"
+        canvas surface=world(seed=7, track=track, laps=3, quality=1, paused=(paused or (not started and hud.phase != "race" and hud.phase != "done")), restart=again) testId="world" width="100%" height="100%" position="relative" user-select="none"
           row testId="hud-top" position="absolute" top="calc(env(safe-area-inset-top) + 16px)" left="calc(env(safe-area-inset-left) + 16px)" gap=10 pointer-events="none"
             column padding=12 border-radius=14 background-color="#14201bcc" align-items="center" min-width=74
               text "POS" font-size=11 font-weight=700 letter-spacing=2 color="#c9d6b8"
@@ -359,15 +354,6 @@ component KerbRacers
                     :hover
                       border-color="#fff4b0"
                     TrackCard(n=n, picked=(track == n))
-              row gap=6 align-items="center" padding=5 border-radius=14 background-color="#14201be6"
-                text "GRAPHICS" font-size=11 font-weight=900 letter-spacing=2 color="#c9d6b8" padding-left=8 padding-right=4
-                for q in [0, 1, 2] key=q
-                  button press=detail(q) testId=`quality-${q}` aria-label=`${qualityName(q)} graphics` aria-pressed=(quality == q) padding-top=7 padding-bottom=7 padding-left=10 padding-right=12 border-radius=10 background-color=(quality == q ? "#f2c230" : "#2c3d27")
-                    row gap=6 align-items="flex-end"
-                      svg width=14 height=12 viewBox="0 0 14 12"
-                        for b in [0, 1, 2] key=b
-                          rect x=(b * 5) y=(8 - b * 4) width=3.5 height=(4 + b * 4) rx=1 fill=(b <= q ? (quality == q ? "#22252b" : "#fbf6e9") : (quality == q ? "#22252b40" : "#fbf6e930"))
-                      text qualityName(q) font-size=13 font-weight=800 color=(quality == q ? "#22252b" : "#fbf6e9")
               button press=play autofocus testId="play" aria-label="Race" margin-top=4 padding-top=12 padding-bottom=12 padding-left=22 padding-right=22 border-radius=18 background-color="#d83a2e" border-width=3 border-color="#ff8a7a" box-shadow="0 7px 0 #7a1d16" animation="pulse 1.1s ease-in-out infinite"
                 :active
                   background-color="#b52c22"
@@ -384,7 +370,7 @@ component KerbRacers
                 Pedal(right=true)
               column align-items="center" gap=3 padding-top=6 padding-bottom=6 padding-left=12 padding-right=12 border-radius=10 background-color="#14201bb3"
                 text "Steering is automatic. Full speed into a corner and you will slide off." font-size=13 color="#fbf6e9" text-align="center"
-                text "On touch: right half is gas, left half is brake. High graphics adds real-time shadows (heavy in Safari)." font-size=11 color="#c9d6b8" text-align="center"
+                text "On touch: right half is gas, left half is brake." font-size=11 color="#c9d6b8" text-align="center"
 
 // The menu's and loading screen's backdrop: a circuit seen from above with six cars lapping it.
 component RaceScene
