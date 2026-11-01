@@ -32,5 +32,10 @@
       "sizes": "512x512",
       "type": "image/png"
     }
-  ]
+  ],
+  "host": {
+    "ios": {
+      "icon": "art/KerbRacers.icon"
+    }
+  }
 }
