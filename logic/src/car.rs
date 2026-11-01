@@ -15,12 +15,22 @@ pub const COAST: f32 = 1.4;
 pub const GRIP: f32 = 15.5;
 pub const GRIP_RUNOFF: f32 = 12.0;
 pub const GRIP_GRASS: f32 = 7.5;
+/// On a dirt track: packed dirt, the loose gravel beside it, and the grass.
+pub const GRIP_DIRT: f32 = 11.0;
+pub const GRIP_GRAVEL: f32 = 8.0;
+pub const GRIP_DIRT_GRASS: f32 = 6.5;
 /// The most the body may point away from where it is going.
 pub const MAX_SLIP: f32 = 0.42;
+/// On dirt the tail swings further out before the body catches it.
+pub const MAX_SLIP_DIRT: f32 = 0.62;
 /// How fast (1/s) the tyres straighten a sideways slide while under their
 /// grip. Lower lets the tail hang out further in a corner: the nose turns in
 /// and the car drifts through at a steady angle of about yaw / DRIFT.
 pub const DRIFT: f32 = 7.0;
+/// On dirt the tyres straighten a slide much more lazily: every corner is a drift.
+pub const DRIFT_DIRT: f32 = 3.2;
+/// Braking on loose dirt (m/s²).
+pub const BRAKE_DIRT: f32 = 17.0;
 /// Sideways speed (m/s) past which the tyres smoke and scrub.
 pub const SLIDE: f32 = 3.0;
 /// Collision circles: two per car, fore and aft.
@@ -227,10 +237,18 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     body.car.steer += (steer - body.car.steer) * (dt * 14.0).min(1.0);
 
     let surface = body.car.surface;
-    let grip = match surface {
-        ASPHALT => GRIP,
-        RUNOFF_SURFACE => GRIP_RUNOFF,
-        _ => GRIP_GRASS,
+    let grip = match (track.dirt, surface) {
+        (false, ASPHALT) => GRIP,
+        (false, RUNOFF_SURFACE) => GRIP_RUNOFF,
+        (false, _) => GRIP_GRASS,
+        (true, ASPHALT) => GRIP_DIRT,
+        (true, RUNOFF_SURFACE) => GRIP_GRAVEL,
+        (true, _) => GRIP_DIRT_GRASS,
+    };
+    let (drift, brake, max_slip) = if track.dirt {
+        (DRIFT_DIRT, BRAKE_DIRT, MAX_SLIP_DIRT)
+    } else {
+        (DRIFT, BRAKE, MAX_SLIP)
     };
     let f = body.forward();
     let l = f.perp();
@@ -238,7 +256,7 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     let mut vl = body.v().dot(l);
     // Pedals.
     if body.car.brake {
-        vf -= BRAKE.min(vf.abs() / dt).copysign(vf) * dt;
+        vf -= brake.min(vf.abs() / dt).copysign(vf) * dt;
     } else {
         let thrust = ENGINE * (1.0 - vf / TOP).max(0.0) * body.car.gas;
         let coast = COAST * (1.0 - body.car.gas);
@@ -252,7 +270,7 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     vf = vf.max(0.0);
     // Tyres pull the sideways velocity out, gently while it is small (the
     // drift) and up to their grip when it is large; past that, slide.
-    let pull = (vl.abs() * DRIFT).min(grip) * dt;
+    let pull = (vl.abs() * drift).min(grip) * dt;
     body.car.sliding = vl.abs() > SLIDE;
     if body.car.sliding {
         // A sliding tyre scrubs speed.
@@ -265,8 +283,8 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     if v.length() > 1.0 {
         let travel = math::atan2(v.y, v.x);
         let slip = wrap_angle(body.car.heading - travel);
-        if slip.abs() > MAX_SLIP {
-            body.car.heading = wrap_angle(travel + MAX_SLIP.copysign(slip));
+        if slip.abs() > max_slip {
+            body.car.heading = wrap_angle(travel + max_slip.copysign(slip));
         }
     }
     body.p += v * dt;

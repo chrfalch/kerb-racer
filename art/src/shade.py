@@ -1,6 +1,6 @@
 # Baked low-sun shadows for Kerb Racers' medium and low graphics.
 #   blender -b -P art/src/shade.py
-# Reads art/src/casters-{0,1,2}.json (written by the logic test
+# Reads art/src/casters-{0,1,2,3}.json (written by the logic test
 # `baked_shade_matches_the_woods` with KR_REBAKE=1) and paints each track's
 # tree, bush and fence shadows into art/textures/shade-{id}.png: an RGBA
 # overlay the game lays over the whole ground. Also paints art/textures/blob.png,
@@ -80,6 +80,12 @@ def bake(track):
                 h = centre - radius + 2 * radius * k / 17
                 r = math.sqrt(max(radius ** 2 - (h - centre) ** 2, 0))
                 disc(x + SUN[0] * h, z + SUN[1] * h, r * 0.9, 0.85)
+        elif kind == "rock":
+            # A squashed ico sphere: ~0.9 m by 0.7 across, 0.6 tall, per unit scale.
+            height = 0.6 * it["h"]
+            for k in range(6):
+                h = height * k / 6
+                disc(x + SUN[0] * h, z + SUN[1] * h, 0.75 * s * (1 - 0.5 * k / 6), 0.85)
         elif kind == "bush":
             disc(x + SUN[0] * 0.4, z + SUN[1] * 0.4, 0.8 * s, 0.7)
         elif kind == "fence":
@@ -108,6 +114,6 @@ def blob():
     save("blob", SHADOW, alpha)
 
 
-for track in range(3):
+for track in range(4):
     bake(track)
 blob()

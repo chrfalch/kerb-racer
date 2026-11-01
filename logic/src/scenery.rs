@@ -277,8 +277,310 @@ fn model(meshes: Vec<MeshData>, materials: Vec<MaterialData>, textures: &[&str])
     }
 }
 
-/// The road: clay run-off and asphalt (textured), then edge lines, kerbs and the start line.
+/// A textured ribbon whose edges move per sample: `edge(i)` gives the
+/// lateral offsets and heights of its two sides. `u` runs across, `v` along.
+fn textured_edges(
+    b: &mut Builder,
+    t: &Track,
+    tile: f32,
+    edge: impl Fn(usize) -> ((f32, f32), (f32, f32)),
+    tint: impl Fn(usize) -> [f32; 4],
+) {
+    let n = t.len();
+    let tiles = (t.length() / tile).round().max(1.0);
+    let along = |i: usize| i as f32 / n as f32 * tiles;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (v0, v1) = (along(i), along(i) + tiles / n as f32);
+        let ((a0, ha0), (c0, hc0)) = edge(i);
+        let ((a1, ha1), (c1, hc1)) = edge(j);
+        b.quad_uvc(
+            [
+                v3(t.at(i, a0), ha0),
+                v3(t.at(i, c0), hc0),
+                v3(t.at(j, c1), hc1),
+                v3(t.at(j, a1), ha1),
+            ],
+            [
+                Vec2::new(a0 / tile, v0),
+                Vec2::new(c0 / tile, v0),
+                Vec2::new(c1 / tile, v1),
+                Vec2::new(a1 / tile, v1),
+            ],
+            [tint(i), tint(i), tint(j), tint(j)],
+        );
+    }
+}
+
+/// A smooth wobble along the loop, -1..1, closing without a seam.
+fn wobble(t: &Track, i: usize, every: f32, salt: u32) -> f32 {
+    let n = t.len();
+    let cells = ((t.length() / every).round() as usize).max(1);
+    let x = i as f32 / n as f32 * cells as f32;
+    let k = x as usize;
+    let f = smooth(0.0, 1.0, x - k as f32);
+    let a = noise((k % cells) as i32, 0, salt);
+    let b = noise(((k + 1) % cells) as i32, 0, salt);
+    (a + (b - a) * f) * 2.0 - 1.0
+}
+
+/// The dirt road: loose gravel either side, packed dirt with ragged edges,
+/// darker wheel ruts worn along the racing line, gravel thrown up in banks round
+/// the outside of the corners, and a chequered line at the start. No paint, no kerbs.
+fn dirt_road(t: &Track) -> Model {
+    let n = t.len();
+    let mut gravel = Builder::new();
+    // Warm, sandy gravel, its outer edge scattered unevenly into the grass.
+    let warm = |k: f32| [1.12 * k, 1.0 * k, 0.8 * k, 1.0];
+    textured_edges(
+        &mut gravel,
+        t,
+        2.5,
+        |i| {
+            let out = |s: f32| HALF + RUNOFF + 0.45 * wobble(t, i, 2.5, if s > 0.0 { 32 } else { 31 });
+            ((-out(-1.0), 0.02), (out(1.0), 0.02))
+        },
+        |i| warm(0.95 + 0.12 * noise(i as i32 / 3, 0, 31)),
+    );
+    // Gravel banks round the outside of every real corner, swept up by the cars.
+    let corner = |i: usize| -> f32 {
+        let b = (0..9).map(|k| t.bend[(i + n + k - 4) % n]).sum::<f32>() / 9.0;
+        smooth(1.0 / 40.0, 1.0 / 18.0, b.abs()).copysign(b)
+    };
+    for s in [-1.0f32, 1.0] {
+        textured_edges(
+            &mut gravel,
+            t,
+            2.5,
+            |i| {
+                // Outside of a left-hander is the right (negative) side.
+                let k = (-corner(i) * s).max(0.0);
+                let inner = HALF - 0.6 * k;
+                let outer = HALF + RUNOFF * (0.4 + 0.6 * k);
+                ((s * inner, 0.035), (s * outer, 0.035 + 0.14 * k))
+            },
+            |i| warm(1.05 + 0.08 * noise(i as i32 / 2, 1, 33)),
+        );
+    }
+    let mut dirt = Builder::new();
+    // Ragged edges: the dirt wanders a little into the gravel and back.
+    let edge = |i: usize, s: f32| s * (HALF - 0.1 + 0.35 * wobble(t, i, 3.0, if s > 0.0 { 42 } else { 41 }));
+    let strips = 12;
+    let tiles = (t.length() / 5.0).round().max(1.0);
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (v0, v1) = (
+            i as f32 / n as f32 * tiles,
+            (i as f32 + 1.0) / n as f32 * tiles,
+        );
+        let tint = |i: usize, lat: f32| {
+            // Two dark ruts where the wheels run, packed and damp; loose and
+            // pale out at the edges where only the gravel goes.
+            let d = lat - t.line[i];
+            let rut = |c: f32| {
+                let x = (d - c) / 0.45;
+                math::exp(-x * x)
+            };
+            let worn = 0.2 * (rut(-0.8) + rut(0.8)) + 0.08 * math::exp(-(d / 2.2) * (d / 2.2));
+            let loose = 0.1 * ((lat.abs() - (HALF - 1.4)) / 1.2).clamp(0.0, 1.0);
+            let patch = 0.06 * wobble(t, i, 7.0, 43);
+            shade([1.0; 4], (1.0 - worn) * (1.0 + patch) + loose)
+        };
+        for k in 0..strips {
+            let lat = |i: usize, k: usize| {
+                let (l, r) = (edge(i, -1.0), edge(i, 1.0));
+                l + (r - l) * k as f32 / strips as f32
+            };
+            let (a0, c0, a1, c1) = (lat(i, k), lat(i, k + 1), lat(j, k), lat(j, k + 1));
+            b_quad(&mut dirt, t, i, j, [a0, c0, c1, a1], 0.04, 5.0, (v0, v1), [
+                tint(i, a0),
+                tint(i, c0),
+                tint(j, c1),
+                tint(j, a1),
+            ]);
+        }
+    }
+    let mut verge = Builder::new();
+    for side in [-1.0f32, 1.0] {
+        textured(
+            &mut verge,
+            t,
+            side * (HALF + RUNOFF - 0.05),
+            side * (HALF + RUNOFF + 1.5),
+            0.015,
+            3.0,
+            |_| [0.92, 0.9, 0.86, 1.0],
+        );
+    }
+    let mut paint = Builder::new();
+    start_line(&mut paint, t);
+    let mut dirt = dirt.finish();
+    dirt.material = 1;
+    let mut gravel = gravel.finish();
+    gravel.material = 0;
+    let mut paint = paint.finish();
+    paint.material = 2;
+    let mut verge = verge.finish();
+    verge.material = 3;
+    let mut marks = ruts(t);
+    marks.material = 4;
+    model(
+        vec![gravel, dirt, paint, verge, marks],
+        vec![
+            textured_material(0, 0.97),
+            textured_material(1, 0.95),
+            MaterialData {
+                metallic: 0.0,
+                roughness: 0.8,
+                ..MaterialData::default()
+            },
+            textured_material(2, 0.95),
+            MaterialData {
+                metallic: 0.0,
+                roughness: 0.95,
+                alpha_mode: AlphaMode::Blend,
+                ..MaterialData::default()
+            },
+        ],
+        &["gravel.tex", "dirt.tex", "scree.tex"],
+    )
+}
+
+/// One textured quad between samples `i` and `j` at lateral offsets
+/// `lat` (i-left, i-right, j-right, j-left).
+#[allow(clippy::too_many_arguments)]
+fn b_quad(
+    b: &mut Builder,
+    t: &Track,
+    i: usize,
+    j: usize,
+    lat: [f32; 4],
+    y: f32,
+    tile: f32,
+    (v0, v1): (f32, f32),
+    colors: [[f32; 4]; 4],
+) {
+    b.quad_uvc(
+        [
+            v3(t.at(i, lat[0]), y),
+            v3(t.at(i, lat[1]), y),
+            v3(t.at(j, lat[2]), y),
+            v3(t.at(j, lat[3]), y),
+        ],
+        [
+            Vec2::new(lat[0] / tile, v0),
+            Vec2::new(lat[1] / tile, v0),
+            Vec2::new(lat[2] / tile, v1),
+            Vec2::new(lat[3] / tile, v1),
+        ],
+        colors,
+    );
+}
+
+/// Grooves and slide marks in the dirt: darker tracks along the racing line
+/// all the way round, and wide sweeping arcs through every slow corner where
+/// the cars go sideways. Vertex alpha carries the fade.
+fn ruts(t: &Track) -> MeshData {
+    let mut b = Builder::new();
+    let n = t.len();
+    let brown = |a: f32| [0.16, 0.1, 0.05, a];
+    // Grooves: a few cars' lines, each wandering a little about the racing line.
+    for set in 0..3u32 {
+        let shift = (set as f32 - 1.0) * 0.35;
+        for tyre in [-0.8f32, 0.8] {
+            for i in 0..n {
+                let j = (i + 1) % n;
+                let a = |i: usize| 0.14 + 0.1 * wobble(t, i, 9.0, 51 + set);
+                let l = |i: usize| t.line[i] + shift + tyre + 0.3 * wobble(t, i, 13.0, 61 + set);
+                let (l0, l1) = (l(i), l(j));
+                b.quad_uvc(
+                    [
+                        v3(t.at(i, l0 - 0.16), 0.045),
+                        v3(t.at(i, l0 + 0.16), 0.045),
+                        v3(t.at(j, l1 + 0.16), 0.045),
+                        v3(t.at(j, l1 - 0.16), 0.045),
+                    ],
+                    [Vec2::ZERO; 4],
+                    [brown(a(i)), brown(a(i)), brown(a(j)), brown(a(j))],
+                );
+            }
+        }
+    }
+    // Slide marks: through each slow corner the rear wheels swing wide of the
+    // fronts, leaving broad, soft arcs on the outside.
+    let reach = (24.0 / t.step) as usize;
+    let apexes = (0..n).filter(|&i| {
+        let v = t.speed[i];
+        v < crate::track::VMAX * 0.8
+            && (1..reach).all(|k| v <= t.speed[(i + k) % n] && v <= t.speed[(i + n - k) % n])
+    });
+    for (a, apex) in apexes.enumerate() {
+        let outside = -t.bend[apex].signum();
+        for set in 0..2u32 {
+            let len = (18.0 / t.step) as usize;
+            let start = len / 2 + (noise(a as i32, set as i32, 71) * 4.0 / t.step) as usize;
+            let strength = 0.16 + 0.1 * noise(a as i32, set as i32, 72);
+            for tyre in [-0.8f32, 0.8] {
+                for k in 0..len {
+                    let i = (apex + n - start + k) % n;
+                    let j = (i + 1) % n;
+                    let fade = |k: usize| {
+                        let u = k as f32 / len as f32;
+                        strength * smooth(0.0, 0.3, u) * (1.0 - smooth(0.6, 1.0, u))
+                    };
+                    let swing = |k: usize| {
+                        let u = k as f32 / len as f32;
+                        outside * 1.1 * math::sin(u * std::f32::consts::PI)
+                    };
+                    let (l0, l1) = (
+                        t.line[i] + tyre + swing(k) + set as f32 * 0.4 * outside,
+                        t.line[j] + tyre + swing(k + 1) + set as f32 * 0.4 * outside,
+                    );
+                    b.quad_uvc(
+                        [
+                            v3(t.at(i, l0 - 0.3), 0.046),
+                            v3(t.at(i, l0 + 0.3), 0.046),
+                            v3(t.at(j, l1 + 0.3), 0.046),
+                            v3(t.at(j, l1 - 0.3), 0.046),
+                        ],
+                        [Vec2::ZERO; 4],
+                        [brown(fade(k)), brown(fade(k)), brown(fade(k + 1)), brown(fade(k + 1))],
+                    );
+                }
+            }
+        }
+    }
+    b.finish()
+}
+
+/// A chequered start/finish line across the road.
+fn start_line(paint: &mut Builder, t: &Track) {
+    let white = hex(0xf1efe8);
+    let cells = 12;
+    for row in 0..2 {
+        for k in 0..cells {
+            let a = -HALF + 2. * HALF * k as f32 / cells as f32;
+            let w = 2. * HALF / cells as f32;
+            let f = t.tangent(0);
+            let o = t.centre(0) + f * (row as f32 * 0.75 - 0.75);
+            let nrm = t.normal(0);
+            let p = |lat: f32, lon: f32| v3(o + nrm * lat + f * lon, 0.07);
+            let c = if (k + row) % 2 == 0 {
+                white
+            } else {
+                hex(0x22252b)
+            };
+            paint.quad_up(p(a, 0.), p(a + w, 0.), p(a + w, 0.75), p(a, 0.75), c);
+        }
+    }
+}
+
+/// The road: clay run-off and asphalt (textured), then edge lines, kerbs and
+/// the start line. A dirt track gets `dirt_road` instead.
 pub fn road(t: &Track) -> Model {
+    if t.dirt {
+        return dirt_road(t);
+    }
     let n = t.len();
     let mut clay = Builder::new();
     textured(
@@ -370,24 +672,7 @@ pub fn road(t: &Track) -> Model {
             }
         }
     }
-    // A chequered start/finish line.
-    let cells = 12;
-    for row in 0..2 {
-        for k in 0..cells {
-            let a = -HALF + 2. * HALF * k as f32 / cells as f32;
-            let w = 2. * HALF / cells as f32;
-            let f = t.tangent(0);
-            let o = t.centre(0) + f * (row as f32 * 0.75 - 0.75);
-            let nrm = t.normal(0);
-            let p = |lat: f32, lon: f32| v3(o + nrm * lat + f * lon, 0.07);
-            let c = if (k + row) % 2 == 0 {
-                white
-            } else {
-                hex(0x22252b)
-            };
-            paint.quad_up(p(a, 0.), p(a + w, 0.), p(a + w, 0.75), p(a, 0.75), c);
-        }
-    }
+    start_line(&mut paint, t);
     let mut clay = clay.finish();
     clay.material = 0;
     let mut tarmac = tarmac.finish();
@@ -486,7 +771,14 @@ pub fn ground(t: &Track) -> Model {
             let (a, b) = (i as i32, j as i32);
             let patch = 0.5 * noise(a / 3, b / 3, 11) + 0.5 * noise((a + 1) / 3, (b + 1) / 3, 11);
             let k = (1.08 - 0.4 * woods) * (0.94 + 0.12 * patch);
-            [k * (1.0 - 0.1 * woods), k, k * (0.95 + 0.08 * woods), 1.0]
+            // Round a dirt track the grass is parched: yellower, browner, in drier patches.
+            let dry = if t.dirt { 1.0 - 0.6 * woods } else { 0.0 };
+            [
+                k * (1.0 - 0.1 * woods) * (1.0 + 0.32 * dry),
+                k * (1.0 + 0.04 * dry),
+                k * (0.95 + 0.08 * woods) * (1.0 - 0.3 * dry),
+                1.0,
+            ]
         })
         .collect();
     let at = |i: usize, j: usize| tints[i * (nz + 1) + j];
@@ -507,10 +799,11 @@ pub fn ground(t: &Track) -> Model {
             );
         }
     }
+    let texture = if t.dirt { "scree.tex" } else { "grass.tex" };
     model(
         vec![b.finish()],
         vec![textured_material(0, 0.95)],
-        &["grass.tex"],
+        &[texture],
     )
 }
 
@@ -575,8 +868,9 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
                 Vec3::new(d.length() / 3.0, 1.0, 1.0),
             ));
             // Red and white boards in front of the fence round the outside of corners.
+            // A dirt track leaves the outside of its corners open.
             let room = t.wall[i].min(t.wall[j]) > HALF + RUNOFF + 3.2;
-            if room && t.bend[i] * s < -1.0 / 40.0 {
+            if !t.dirt && room && t.bend[i] * s < -1.0 / 40.0 {
                 let lat = s * (HALF + RUNOFF + 2.0);
                 let (p, q) = (t.at(i, lat), t.at(j, lat));
                 // The frame always behind the boards, away from the road.
@@ -590,6 +884,10 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
             }
             i += every;
         }
+    }
+    if t.dirt {
+        rocky(w, t, quality, &mut out);
+        return out;
     }
     // Dressing along the verge: ferns, poppies and stones, logs by the corners.
     if quality > 0 {
@@ -714,6 +1012,120 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
         ));
     }
     out
+}
+
+/// A dirt track's surroundings: rocky scrubland with boulders, a few hardy
+/// pines, bushes and stumps, and stones scattered along the verge.
+fn rocky(w: &World, t: &Track, quality: u32, out: &mut Vec<Prop>) {
+    let n = t.len();
+    let (cx, cz) = centre_of(t);
+    let mut placed: Vec<(Vec2, f32)> = Vec::new();
+    let free = |placed: &[(Vec2, f32)], p: Vec2, r: f32| {
+        placed.iter().all(|(q, s)| (*q - p).length() >= r + s)
+    };
+    // Boulders first, big ones out past the fences, in loose clusters.
+    for _ in 0..900 {
+        let p = Vec2::new(w.rand(cx - 95.0..cx + 95.0), w.rand(cz - 82.0..cz + 82.0));
+        let clear = clearance(t, p);
+        if !(WALL + 1.2..34.0).contains(&clear) {
+            continue;
+        }
+        let size = w.rand(1.3..3.8);
+        let radius = 0.9 * size;
+        if !free(&placed, p, radius * 0.8) {
+            continue;
+        }
+        placed.push((p, radius * 0.8));
+        let flat = w.rand(0.55..1.15);
+        out.push(Prop::new(
+            "rock.model",
+            p,
+            w.rand(0.0..std::f32::consts::TAU),
+            Vec3::new(size, size * flat, size * w.rand(0.8..1.1)),
+        ));
+    }
+    // A few hardy pines among the rocks: far fewer than in the woods.
+    for _ in 0..500 {
+        let p = Vec2::new(w.rand(cx - 95.0..cx + 95.0), w.rand(cz - 82.0..cz + 82.0));
+        let clear = clearance(t, p);
+        if !(WALL + 2.5..34.0).contains(&clear) {
+            continue;
+        }
+        let (model, radius, height) = *w
+            .pick(&[
+                ("pine-a.model", 2.3, 8.5),
+                ("pine-b.model", 1.9, 6.5),
+                ("pine-c.model", 2.7, 10.5),
+            ])
+            .unwrap();
+        let scale = w.rand(0.9..1.3);
+        if !free(&placed, p, radius * scale * 0.85) {
+            continue;
+        }
+        placed.push((p, radius * scale * 0.85));
+        out.push(Prop {
+            crown: Some((radius * scale * 1.15, height * scale)),
+            ..Prop::new(
+                model,
+                p,
+                w.rand(0.0..std::f32::consts::TAU),
+                Vec3::splat(scale),
+            )
+        });
+    }
+    // Stones along the verge, thrown wide by the cars.
+    let every = (2.5 / t.step).max(1.0) as usize;
+    for s in [-1.0f32, 1.0] {
+        for i in (0..n).step_by(every) {
+            let p = t.at(i, s * (HALF + RUNOFF + w.rand(1.0..2.8)));
+            let size = w.rand(0.35..0.9);
+            if t.wall[i] < HALF + RUNOFF + 3.4 || clearance(t, p) < HALF + RUNOFF + 0.9 || !w.chance(0.55) {
+                continue;
+            }
+            out.push(Prop::new(
+                "rock.model",
+                p,
+                w.rand(0.0..std::f32::consts::TAU),
+                Vec3::new(size, size * w.rand(0.6..1.0), size),
+            ));
+        }
+    }
+    // Scrub: bushes, stumps and the odd log; no flowers or ferns up here.
+    let scrub = if quality == 0 { 0 } else { 700 };
+    for _ in 0..scrub {
+        let p = Vec2::new(w.rand(cx - 80.0..cx + 80.0), w.rand(cz - 70.0..cz + 70.0));
+        let clear = clearance(t, p);
+        if !(HALF + RUNOFF + 2.0..30.0).contains(&clear) {
+            continue;
+        }
+        let (model, radius) = *w
+            .pick(&[
+                ("bush.model", 1.1),
+                ("rock.model", 0.9),
+                ("rock.model", 0.9),
+                ("stump.model", 0.4),
+                ("logs.model", 1.0),
+            ])
+            .unwrap();
+        if model != "rock.model" && model != "stump.model" && clear < WALL + 0.5 {
+            continue;
+        }
+        if !free(&placed, p, radius) {
+            continue;
+        }
+        placed.push((p, radius));
+        let scale = if model == "rock.model" {
+            w.rand(0.6..1.4)
+        } else {
+            w.rand(0.8..1.2)
+        };
+        out.push(Prop::new(
+            model,
+            p,
+            w.rand(0.0..std::f32::consts::TAU),
+            Vec3::splat(scale),
+        ));
+    }
 }
 
 /// Flowers in little clusters over the grass, as one generated mesh: white
