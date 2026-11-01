@@ -1,5 +1,5 @@
 use exact_game::Sim;
-use kerb_racers_logic::car::{Car, GRASS};
+use kerb_racers_logic::car::{self, Car, GRASS};
 use kerb_racers_logic::track::{self, Track, HALF};
 use kerb_racers_logic::{radar, standings, KerbRacers, Options, Race, PLAYER, RADAR_REACH};
 
@@ -305,4 +305,125 @@ fn cars_drift_through_corners() {
     println!("slip: corners {corner:.1}°, straights {straight:.1}°");
     assert!(corner > 6.0, "the tail hangs out in corners: {corner:.1}°");
     assert!(straight < corner / 2.0, "and straightens up after: {straight:.1}°");
+}
+
+/// Walk the ground across the whole road and verge in 10 cm steps along
+/// continuous paths: no seams where the road's height model hands over between
+/// samples, corners or the land.
+#[test]
+fn the_ground_has_no_seams() {
+    for id in 0..4 {
+        let t = track::build(id);
+        let mut worst = (0f32, 0f32, 0f32);
+        for k in -76..=76 {
+            let lat = k as f32 * 0.1;
+            let mut prev = None;
+            for step in 0..(t.length() * 10.0) as i32 {
+                let s = step as f32 * 0.1;
+                let i = ((s / t.step) as usize).min(t.len() - 1);
+                let u = s / t.step - i as f32;
+                let p = t.at(i, lat) * (1.0 - u) + t.at(t.wrap(i as i64 + 1), lat) * u;
+                let h = t.height(p, i);
+                if let Some(q) = prev {
+                    let d: f32 = h - q;
+                    if d.abs() > worst.0 {
+                        worst = (d.abs(), s, lat);
+                    }
+                }
+                prev = Some(h);
+            }
+        }
+        println!("{}: steepest 10 cm step {:.3} m at {:.1} m, {:.1} m across", track::layout(id).name, worst.0, worst.1, worst.2);
+        assert!(worst.0 < 0.1, "a seam on {}: {worst:?}", track::layout(id).name);
+    }
+}
+
+#[test]
+fn flat_circuits_stay_flat() {
+    for id in [1, 2] {
+        let t = track::build(id);
+        assert!(t.y.iter().chain(&t.bank).all(|h| *h == 0.0));
+        // The land lies a hair under the road there, and nowhere else moves.
+        assert!(t.land.iter().all(|h| (-track::SINK..=0.0).contains(h)));
+    }
+}
+
+/// Coast for half a second from the racing line `s` metres into the lap.
+fn coast(t: &Track, s: f32) -> f32 {
+    let i = (s / t.step) as usize;
+    let p = t.at(i, t.line[i]);
+    let f = t.tangent(i);
+    let mut body = car::Body {
+        car: Car {
+            idx: i as u32,
+            heading: f.y.atan2(f.x),
+            vx: f.x * 20.0,
+            vz: f.y * 20.0,
+            y: t.surface(p, i),
+            vy: t.grade[i] * 20.0,
+            load: 1.0,
+            skill: 1.0,
+            ..Car::default()
+        },
+        p,
+    };
+    car::locate(t, &mut body);
+    for _ in 0..60 {
+        car::step(t, &mut body, 1.0 / 120.0);
+    }
+    body.v().length()
+}
+
+#[test]
+fn hills_slow_the_climb_and_speed_the_descent() {
+    // Pine Hollow climbs to its hairpin from 110 m and runs down from 185 m.
+    let t = track::build(0);
+    let (flat, up, down) = (coast(&t, 60.0), coast(&t, 130.0), coast(&t, 210.0));
+    println!("after coasting: level {flat:.2}, uphill {up:.2}, downhill {down:.2} m/s");
+    assert!(up < flat - 0.4 && down > flat + 0.4);
+}
+
+/// Every car's longest flight, in ticks, over `seconds` of racing.
+fn flights(track: u32, seconds: u32) -> Vec<u32> {
+    let mut game = race(track);
+    game.key_down("KeyW");
+    let mut longest = vec![0; 6];
+    for _ in 0..(120 * seconds) {
+        game.run(1000.0 / 120.0);
+        for (_, car) in game.world().query::<&Car>().iter() {
+            let k = car.id as usize;
+            longest[k] = longest[k].max(car.air_ticks);
+        }
+    }
+    longest
+}
+
+#[test]
+fn cars_fly_off_crests_and_come_down() {
+    let gravel = flights(3, 30);
+    println!("Gravel Pit's longest flights (ticks): {gravel:?}");
+    assert!(gravel.iter().any(|t| *t >= 24), "someone gets real air");
+    assert!(gravel.iter().all(|t| *t < 120), "and nobody flies for a second");
+    let flat = flights(2, 20);
+    assert!(flat.iter().all(|t| *t == 0), "Kerb Ring has nothing to fly off: {flat:?}");
+}
+
+#[test]
+fn a_save_in_the_air_restores_in_the_air() {
+    let mut game = race(3);
+    game.key_down("KeyW");
+    for _ in 0..(120 * 20) {
+        game.run(1000.0 / 120.0);
+        let car = game.world().require::<Car>("player").clone();
+        if car.air && car.air_ticks > 4 {
+            break;
+        }
+    }
+    assert!(game.world().require::<Car>("player").air, "the player leaves the ground");
+    let saved = game.save().unwrap();
+    let mut other = race(3);
+    other.restore(&saved).unwrap();
+    game.run(2000.0);
+    other.run(2000.0);
+    assert_eq!(game.world().hash(), other.world().hash());
 }
