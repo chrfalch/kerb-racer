@@ -40,7 +40,7 @@ shape Hud
   standings: Row[]
   radar: Radar
 
-fn trackName(n: number): string = n == 0 ? "Pine Hollow" : n == 1 ? "Fern Loop" : "Kerb Ring"
+fn trackName(n: number): string = n == 0 ? "Pine Hollow" : n == 1 ? "Fern Loop" : n == 2 ? "Kerb Ring" : "Gravel Pit"
 
 fn tip(n: number): string = n == 0 ? "Warming up the tyres…" : n == 1 ? "Painting the kerbs red and white…" : n == 2 ? "Planting the pine trees…" : n == 3 ? "Polishing the chrome bumpers…" : n == 4 ? "Sweeping leaves off the racing line…" : n == 5 ? "Telling five rivals to drive nicely…" : "Topping up the fuel…"
 
@@ -306,6 +306,10 @@ component KerbRacers
               column gap=4 align-items="center"
                 text "Kerb Ring" font-weight=800 color=(track == 2 ? "#22252b" : "#fbf6e9")
                 text "Tight and technical" font-size=12 color=(track == 2 ? "#22252b" : "#c9d6b8")
+            button press=pick(3) testId="track-3" aria-label="Gravel Pit" padding=16 border-radius=14 min-width=150 background-color=(track == 3 ? "#f2c230" : "#2c3d27")
+              column gap=4 align-items="center"
+                text "Gravel Pit" font-weight=800 color=(track == 3 ? "#22252b" : "#fbf6e9")
+                text "Loose dirt, all sideways" font-size=12 color=(track == 3 ? "#22252b" : "#c9d6b8")
           row gap=8 align-items="center"
             text "Graphics" font-size=14 color="#c9d6b8"
             button press=detail(0) testId="quality-0" aria-label="Low graphics" padding=8 border-radius=10 background-color=(quality == 0 ? "#f2c230" : "#2c3d27")

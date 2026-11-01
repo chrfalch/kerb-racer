@@ -23,7 +23,7 @@ fn race(track: u32) -> Sim<KerbRacers> {
 
 #[test]
 fn tracks_are_short_and_separated() {
-    for id in 0..3 {
+    for id in 0..4 {
         let t = track::build(id);
         let n = t.len();
         assert!(t.length() > 240. && t.length() < 380., "{} m", t.length());
@@ -48,14 +48,16 @@ fn tracks_are_short_and_separated() {
                 );
             }
         }
-        assert!(slowest > 7.5 && fastest > 25.0);
+        // Dirt has less grip, so its hairpins are slower.
+        let floor = if t.dirt { 6.0 } else { 7.5 };
+        assert!(slowest > floor && fastest > 25.0);
         assert!(t.wall.iter().all(|w| *w > HALF + 1.5));
     }
 }
 
 #[test]
 fn rivals_finish_three_laps_on_every_track() {
-    for id in 0..3 {
+    for id in 0..4 {
         let mut game = race(id);
         // The player holds gas and brakes for the planned speed: a careful human.
         for _ in 0..(120 * 150) {
@@ -135,7 +137,7 @@ fn saves_restore_and_continue_identically() {
 
 #[test]
 fn scenery_budget() {
-    for id in 0..3 {
+    for id in 0..4 {
         let game = race(id);
         let w = game.world();
         let mut counts = std::collections::BTreeMap::new();
@@ -188,6 +190,7 @@ fn wheels_roll_with_the_road_and_lock_under_braking() {
 /// that casts a baked shadow, in setup's order.
 fn casters(game: &Sim<KerbRacers>) -> String {
     let w = game.world();
+    let dirt = w.resource::<Track>().dirt;
     let (centre, size) = kerb_racers_logic::scenery::ground_rect(&w.resource::<Track>());
     let mut out = format!(
         "[\n  {{\"kind\": \"ground\", \"x\": {:.3}, \"z\": {:.3}, \"w\": {:.3}, \"h\": {:.3}}},\n",
@@ -201,7 +204,16 @@ fn casters(game: &Sim<KerbRacers>) -> String {
             continue;
         };
         let kind = name.trim_end_matches(".model");
-        if !["pine-a", "pine-b", "pine-c", "tree-a", "bush", "fence"].contains(&kind) {
+        // The dirt track's boulders cast shadows too (the woods' rocks are pebbles).
+        let rock = dirt && kind == "rock";
+        if !rock && !["pine-a", "pine-b", "pine-c", "tree-a", "bush", "fence"].contains(&kind) {
+            continue;
+        }
+        if rock {
+            out += &format!(
+                "  {{\"kind\": \"rock\", \"x\": {:.3}, \"z\": {:.3}, \"scale\": {:.3}, \"h\": {:.3}}},\n",
+                pose.position.x, pose.position.z, pose.scale.x, pose.scale.y
+            );
             continue;
         }
         let along = pose.rotation * exact_game::Vec3::X * pose.scale.x;
@@ -217,7 +229,7 @@ fn casters(game: &Sim<KerbRacers>) -> String {
 #[test]
 fn baked_shade_matches_the_woods() {
     // KR_REBAKE=1 rewrites the lists; then run `blender -b -P art/src/shade.py`.
-    for id in 0..3 {
+    for id in 0..4 {
         // Setup waits for the declared models, so deliver them as a host would.
         let game = race(id);
         let path = format!(

@@ -57,7 +57,7 @@ The authoring diary: `bun exact.mjs feedback status` says whether this project k
 ## Baked shadows (read before changing trees, fences or props)
 
 Real-time sun shadows run at ~12 fps in Safari's WebGPU, so Medium and Low draw
-baked ones: `art/textures/shade-{0,1,2}.png` is an alpha overlay painted from
+baked ones: `art/textures/shade-{0,1,2,3}.png` is an alpha overlay painted from
 the exact seeded positions of every pine, broadleaf, bush and fence section
 (`art/src/casters-{id}.json`), and each car carries a blob (`blob.png`).
 Real-time shadows are High only (`shadows: quality >= 2` in `light()`); keep it so.

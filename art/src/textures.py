@@ -1,6 +1,6 @@
 # Tileable ground textures for Kerb Racers, painted with numpy inside Blender:
 #   blender -b -P art/src/textures.py
-# Writes art/textures/{asphalt,grass,clay}.png (sRGB, 512², seamless).
+# Writes art/textures/{asphalt,grass,clay,dirt,gravel,scree}.png (sRGB, 512², seamless).
 import bpy, numpy as np, os
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "textures")
 N = 512
@@ -67,4 +67,65 @@ earth = fbm(5, 5, 51)
 peb = blur((rng.random((N, N)) > 0.992).astype(float), 1) * 2.2
 v = 0.8 + 0.25 * (earth - 0.5) + 0.1 * (blur(rng.random((N, N)), 1) - 0.5)
 save("clay", np.stack([0.62 * v + 0.15 * peb, 0.26 * v + 0.12 * peb, 0.17 * v + 0.1 * peb], -1))
+
+# The dirt track, with its own generator so the textures above never change.
+rng = np.random.default_rng(97)
+
+def stones(density, r, seed):
+    """Round, domed stones with a lit top-left and a shadowed bottom-right:
+    (coverage, brightness), both seamless."""
+    g = np.random.default_rng(seed)
+    seeds = g.random((N, N)) > 1 - density
+    size = np.where(seeds, g.uniform(0.6, 1.0, (N, N)), 0)
+    tone = g.random((N, N))
+    cover = np.zeros((N, N))
+    light = np.zeros((N, N))
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            d = np.hypot(dx, dy) / (r + 0.5)
+            inside = np.clip((size - d) * 4, 0, 1)
+            shifted = np.roll(np.roll(inside, dy, 0), dx, 1)
+            lit = np.roll(np.roll(tone, dy, 0), dx, 1) + 0.25 * (-dx - dy) / (r + 0.5)
+            take = shifted > cover
+            light = np.where(take, lit, light)
+            cover = np.maximum(cover, shifted)
+    return cover, np.clip(light, 0, 1)
+
+# Dirt: packed, sun-baked ochre earth; soft darker damp patches, fine grit and
+# the odd embedded stone, so it reads as a road without any paint.
+earth = fbm(4, 5, 61)
+damp = np.clip((fbm(2, 3, 71) - 0.45) * 2.5, 0, 1)
+grit = blur(rng.random((N, N)), 1) - 0.5
+cover, tone = stones(0.0012, 3, 81)
+v = 0.8 + 0.18 * (earth - 0.5) + 0.08 * grit - 0.1 * damp
+v = v * (1 - 0.6 * cover) + 0.6 * cover * (0.6 + 0.5 * tone)
+save("dirt", np.stack([0.70 * v, 0.53 * v, 0.36 * v], -1))
+
+# Gravel: loose grey-beige stones, packed tight, on sandy earth.
+sand = fbm(6, 4, 91)
+small, ts = stones(0.035, 2, 101)
+big, tb = stones(0.006, 4, 111)
+v = 0.62 + 0.1 * (sand - 0.5)
+v = v * (1 - small) + small * (0.62 + 0.4 * ts)
+v = v * (1 - big) + big * (0.6 + 0.42 * tb)
+# Dark gaps between stones.
+both = np.maximum(small, big)
+v -= 0.18 * np.clip(blur(both, 1) - both, 0, 1)
+warm = 0.08 * (fbm(3, 3, 121) - 0.5)
+save("gravel", np.stack([0.80 * v + warm, 0.74 * v + warm * 0.6, 0.62 * v], -1))
+
+# Scree: the dirt track's surroundings. Pale, dusty rock and grit, broken by
+# sparse tufts of dry grass and scattered stones.
+ground = fbm(3, 5, 131)
+tufts = np.clip((fbm(6, 3, 141) - 0.58) * 4, 0, 1) * np.clip(blur(rng.random((N, N)), 1) * 2.2 - 0.6, 0, 1)
+rocks, tr = stones(0.004, 4, 151)
+pebbles, tp = stones(0.02, 1, 161)
+v = 0.68 + 0.2 * (ground - 0.5) + 0.06 * (blur(rng.random((N, N)), 1) - 0.5)
+rgb = np.stack([0.80 * v, 0.72 * v, 0.60 * v], -1)
+grass = np.stack([0.52 + 0.1 * tufts, 0.50 + 0.08 * tufts, 0.26 + 0 * tufts], -1)
+rgb = rgb * (1 - tufts[..., None] * 0.8) + grass * tufts[..., None] * 0.8
+for cover, tone, k in ((pebbles, tp, 0.85), (rocks, tr, 0.95)):
+    stone = (0.45 + 0.45 * tone)[..., None] * np.array([0.82, 0.79, 0.74])
+    rgb = rgb * (1 - cover[..., None] * k) + stone * cover[..., None] * k
+save("scree", rgb)
 print("textures written to", OUT)
