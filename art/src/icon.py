@@ -7,7 +7,7 @@
 # tile's edge. Then make the smaller sizes with
 #   sips -z 512 512 assets/icon/icon-1024.png --out assets/icon/icon-512.png
 #   sips -z 192 192 assets/icon/icon-1024.png --out assets/icon/icon-192.png
-# Also writes iOS's full-bleed icon, art/KerbRacers.icon (app.json's
+# Also writes iOS's full-bleed icon, icon/KerbRacers.icon (app.json's
 # host.ios.icon): the same scene framed a little wider so the smoke clears the
 # rounded corners, as two Icon Composer layers, the track (opaque) and the car
 # and smoke above it, so the system's depth and highlights lift the car.
@@ -18,7 +18,7 @@ from mathutils import Vector, Euler
 HERE = os.path.dirname(os.path.abspath(__file__))
 A = os.path.join(HERE, "..", "models") + "/"
 OUT = os.path.join(HERE, "..", "..", "assets", "icon", "icon-1024.png")
-IOS = os.path.join(HERE, "..", "KerbRacers.icon", "Assets")
+IOS = os.path.join(HERE, "..", "..", "icon", "KerbRacers.icon", "Assets")
 RES = 1024
 bpy.ops.wm.read_factory_settings(use_empty=True)
 sc=bpy.context.scene
