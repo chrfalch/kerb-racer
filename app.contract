@@ -151,10 +151,19 @@ component KerbRacers
   state paused = false
   state hint = 0
   state started = false
+  // Sound: off by choice (remembered); the ring/silent switch mutes it too.
+  state muted = false persist
+  // The menu music waits for a first tap: browsers start sound only from one.
+  state awake = false
   resource hud = exactSurface("world") as shape Hud
 
   action pick(n: number)
     track = n
+    awake = true
+
+  action toggleSound
+    muted = awake ? not muted : false
+    awake = true
 
   action play
     paused = false
@@ -185,7 +194,7 @@ component KerbRacers
   view
     main viewport-fit="cover" width="100%" height="100%" background-color="#1d2b1a" color="#fbf6e9" font-family="system-ui"
       if playing
-        canvas surface=world(seed=7, track=track, laps=3, quality=1, paused=(paused or (not started and hud.phase != "race" and hud.phase != "done")), restart=again) testId="world" width="100%" height="100%" position="relative" user-select="none"
+        canvas surface=world(seed=7, track=track, laps=3, quality=1, paused=(paused or (not started and hud.phase != "race" and hud.phase != "done")), volume=(muted ? 0 : 1), restart=again) testId="world" width="100%" height="100%" position="relative" user-select="none"
           row testId="hud-top" position="absolute" top="calc(env(safe-area-inset-top) + 16px)" left="calc(env(safe-area-inset-left) + 16px)" gap=10 pointer-events="none"
             column padding=12 border-radius=14 background-color="#14201bcc" align-items="center" min-width=74
               text "POS" font-size=11 font-weight=700 letter-spacing=2 color="#c9d6b8"
@@ -210,6 +219,8 @@ component KerbRacers
               else
                 rect x=3 y=2 width=5 height=16 rx=1 fill="#fbf6e9"
                 rect x=12 y=2 width=5 height=16 rx=1 fill="#fbf6e9"
+          button press=toggleSound testId="sound" aria-label=(muted ? "Sound off" : "Sound on") aria-pressed=(not muted) position="absolute" top="calc(env(safe-area-inset-top) + 72px)" left="50%" translate="-50% 0px" width=40 height=40 align-items="center" justify-content="center" border-radius=20 background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
+            Speaker(on=(not muted))
           column position="absolute" left=0 right=0 bottom="calc(env(safe-area-inset-bottom) + 6px)" align-items="center" gap=8 pointer-events="none"
             if hud.off
               text "OFF TRACK" testId="off-track" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#a4472fe6"
@@ -335,7 +346,10 @@ component KerbRacers
                 text "Menu"
       else
         column testId="menu-screen" width="100%" height="100%" position="relative" overflow="hidden" background-color="#2a5224"
+          audio src="assets/music/menu.m4a" testId="menu-music" loop=true preload="auto" volume=0.6 paused=(muted or not awake)
           RaceScene()
+          button press=toggleSound testId="sound" aria-label=(awake and not muted ? "Sound on" : "Sound off") aria-pressed=(awake and not muted) position="absolute" z-index=1 top="calc(env(safe-area-inset-top) + 14px)" right="calc(env(safe-area-inset-right) + 14px)" width=48 height=48 align-items="center" justify-content="center" border-radius=24 background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
+            Speaker(on=(awake and not muted))
           column position="absolute" inset=0 box-sizing="border-box" overflow="auto" padding-top="calc(env(safe-area-inset-top) + 16px)" padding-right="calc(max(env(safe-area-inset-left), env(safe-area-inset-right)) + 16px)" padding-bottom="calc(env(safe-area-inset-bottom) + 16px)" padding-left="calc(max(env(safe-area-inset-left), env(safe-area-inset-right)) + 16px)"
             column margin-top="auto" margin-bottom="auto" align-items="center" gap=14
               column align-items="center" gap=2 animation="sway 3.2s ease-in-out infinite"
@@ -582,6 +596,20 @@ component TrackCard
             circle cx=7 cy=7 r=6 fill=(k <= trackLevel(n) ? "#22252b" : (picked ? "#22252b33" : "#fbf6e922")) stroke=(picked ? "#22252b" : "#fbf6e966") stroke-width=1
             circle cx=7 cy=7 r=2.4 fill=(k <= trackLevel(n) ? "#c9c9c9" : "none")
         text levelName(trackLevel(n)) font-size=10 font-weight=900 letter-spacing=1 color=(picked ? "#22252b" : "#c9d6b8")
+
+// A loudspeaker, with its waves when the sound is on and a cross when it is off.
+component Speaker
+  props
+    on: bool
+  view
+    svg width=22 height=22 viewBox="0 0 22 22" aria-hidden=true
+      polygon points="2,8 6,8 11,3.5 11,18.5 6,14 2,14" fill="#fbf6e9"
+      if on
+        path d="M 14 7.5 Q 16.5 11 14 14.5" fill="none" stroke="#fbf6e9" stroke-width=2 stroke-linecap="round"
+        path d="M 16.5 5 Q 20.5 11 16.5 17" fill="none" stroke="#fbf6e9" stroke-width=2 stroke-linecap="round"
+      else
+        line x1=14.5 y1=8 x2=20 y2=14 stroke="#ff8a7a" stroke-width=2.2 stroke-linecap="round"
+        line x1=20 y1=8 x2=14.5 y2=14 stroke="#ff8a7a" stroke-width=2.2 stroke-linecap="round"
 
 // A mouse with its left or right button lit: how to drive.
 component Mouse
