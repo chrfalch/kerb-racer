@@ -36,6 +36,7 @@ shape Hud
   gas: bool
   brake: bool
   sliding: bool
+  air: bool
   off: bool
   standings: Row[]
   radar: Radar
@@ -211,7 +212,9 @@ component KerbRacers
                 rect x=3 y=2 width=5 height=16 rx=1 fill="#fbf6e9"
                 rect x=12 y=2 width=5 height=16 rx=1 fill="#fbf6e9"
           column position="absolute" left=0 right=0 bottom="calc(env(safe-area-inset-bottom) + 6px)" align-items="center" gap=8 pointer-events="none"
-            if hud.off
+            if hud.air
+              text "AIR" testId="air" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#3fa7d6e6"
+            else if hud.off
               text "OFF TRACK" testId="off-track" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#a4472fe6"
             else
               if hud.sliding

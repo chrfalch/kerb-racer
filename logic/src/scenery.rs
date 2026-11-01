@@ -1,6 +1,6 @@
 //! Generated geometry: the textured ground and road with its kerbs and lines,
 //! flowers, the player's marker, and where the Blender models stand.
-use crate::track::{Track, HALF, RUNOFF, WALL};
+use crate::track::{Track, CELL, CELLS, HALF, RUNOFF, SINK, WALL};
 use exact_game::asset::{AlphaMode, MaterialData, MeshData, Model, Node};
 use exact_game::*;
 
@@ -92,6 +92,16 @@ impl Builder {
     }
     /// An upward quad with texture coordinates and a colour at each corner.
     pub fn quad_uvc(&mut self, q: [Vec3; 4], uv: [Vec2; 4], colors: [[f32; 4]; 4]) {
+        // The face's own normal, so slopes catch (or turn from) the low sun.
+        let mut n = (q[2] - q[0]).cross(q[3] - q[1]);
+        if n.y < 0.0 {
+            n = -n;
+        }
+        let n = n.try_normalize().unwrap_or(Vec3::Y);
+        self.quad_uvcn(q, uv, colors, [n; 4]);
+    }
+    /// An upward quad with texture coordinates, and a colour and a normal at each corner.
+    pub fn quad_uvcn(&mut self, q: [Vec3; 4], uv: [Vec2; 4], colors: [[f32; 4]; 4], normals: [Vec3; 4]) {
         let up = (q[1] - q[0]).cross(q[2] - q[0]).y >= 0.0;
         let order = if up {
             [0, 1, 2, 0, 2, 3]
@@ -101,8 +111,9 @@ impl Builder {
         let base = (self.m.positions.len() / 3) as u32;
         for k in 0..4 {
             let p = q[k];
+            let n = normals[k];
             self.m.positions.extend([p.x, p.y, p.z]);
-            self.m.normals.extend([0.0, 1.0, 0.0]);
+            self.m.normals.extend([n.x, n.y, n.z]);
             self.m.uvs.extend([uv[k].x, uv[k].y]);
             self.m.colors.extend(colors[k]);
             self.lo = self.lo.min(p);
@@ -164,6 +175,43 @@ fn v3(p: Vec2, y: f32) -> Vec3 {
     Vec3::new(p.x, y, p.y)
 }
 
+/// Give a ground-hugging mesh the ground's own normals. Its quads' faces
+/// would do on open road, but on the inside of a hairpin the strips fold over
+/// each other and their faces point anywhere; the ground under them doesn't.
+fn drape(m: &mut MeshData, t: &Track) {
+    let mut hint = None;
+    for (k, p) in m.positions.chunks(3).enumerate() {
+        let at = Vec2::new(p[0], p[2]);
+        let (i, _) = match hint {
+            Some(h) => t.locate(at, h, 30),
+            None => t.locate_all(at),
+        };
+        hint = Some(i);
+        let g = t.gradient(at, i);
+        let n = Vec3::new(-g.x, 1.0, -g.y).normalize();
+        m.normals[k * 3..k * 3 + 3].copy_from_slice(&[n.x, n.y, n.z]);
+        let shade = hillshade(n);
+        for c in &mut m.colors[k * 4..k * 4 + 3] {
+            *c *= shade;
+        }
+    }
+}
+
+/// Toward the low western sun (the "sun" light in `light`).
+const SUN: Vec3 = Vec3::new(-0.888, 0.304, -0.355);
+
+/// From straight above a hill hardly shows, so paint the light on: ground
+/// tilted toward the sun a touch brighter, away from it darker, on top of
+/// what the lighting already does.
+fn hillshade(n: Vec3) -> f32 {
+    (1.0 + 1.6 * (n.dot(SUN) - SUN.y)).clamp(0.55, 1.35)
+}
+
+/// The point `lat` metres left of sample `i`, `y` above the ground there.
+fn on(t: &Track, i: usize, lat: f32, y: f32) -> Vec3 {
+    v3(t.at(i, lat), t.surface_at(i, lat) + y)
+}
+
 /// A ribbon between two lateral offsets along the whole loop, coloured per segment.
 fn ribbon(
     b: &mut Builder,
@@ -178,10 +226,10 @@ fn ribbon(
         let j = (i + 1) % n;
         if let Some(c) = color(i) {
             b.quad_up(
-                v3(t.at(i, from), y),
-                v3(t.at(i, to), y),
-                v3(t.at(j, to), y),
-                v3(t.at(j, from), y),
+                on(t, i, from, y),
+                on(t, i, to, y),
+                on(t, j, to, y),
+                on(t, j, from, y),
                 c,
             );
         }
@@ -198,7 +246,10 @@ fn textured(
     tile: f32,
     tint: impl Fn(usize) -> [f32; 4],
 ) {
-    textured_strips(b, t, from, to, 1, y, tile, |i, _| tint(i));
+    // Cut across every couple of metres, so a wide one follows a banked or
+    // crowned road and the land on the inside of a hairpin.
+    let strips = (((to - from).abs() / 2.0).ceil() as usize).max(1);
+    textured_strips(b, t, from, to, strips, y, tile, |i, _| tint(i));
 }
 
 /// A textured ribbon cut into `strips` across, tinted at every corner by
@@ -226,10 +277,10 @@ fn textured_strips(
             let c = from + (to - from) * (k + 1) as f32 / strips as f32;
             b.quad_uvc(
                 [
-                    v3(t.at(i, a), y),
-                    v3(t.at(i, c), y),
-                    v3(t.at(j, c), y),
-                    v3(t.at(j, a), y),
+                    on(t, i, a, y),
+                    on(t, i, c, y),
+                    on(t, j, c, y),
+                    on(t, j, a, y),
                 ],
                 [
                     Vec2::new(a / tile, v0),
@@ -294,21 +345,30 @@ fn textured_edges(
         let (v0, v1) = (along(i), along(i) + tiles / n as f32);
         let ((a0, ha0), (c0, hc0)) = edge(i);
         let ((a1, ha1), (c1, hc1)) = edge(j);
-        b.quad_uvc(
-            [
-                v3(t.at(i, a0), ha0),
-                v3(t.at(i, c0), hc0),
-                v3(t.at(j, c1), hc1),
-                v3(t.at(j, a1), ha1),
-            ],
-            [
-                Vec2::new(a0 / tile, v0),
-                Vec2::new(c0 / tile, v0),
-                Vec2::new(c1 / tile, v1),
-                Vec2::new(a1 / tile, v1),
-            ],
-            [tint(i), tint(i), tint(j), tint(j)],
-        );
+        // Cut across every couple of metres, so it follows the ground.
+        let strips = (((c0 - a0).abs().max((c1 - a1).abs()) / 2.0).ceil() as usize).max(1);
+        let mix = |a: f32, c: f32, k: usize| a + (c - a) * k as f32 / strips as f32;
+        for k in 0..strips {
+            let (l0, r0) = (mix(a0, c0, k), mix(a0, c0, k + 1));
+            let (l1, r1) = (mix(a1, c1, k), mix(a1, c1, k + 1));
+            let (hl0, hr0) = (mix(ha0, hc0, k), mix(ha0, hc0, k + 1));
+            let (hl1, hr1) = (mix(ha1, hc1, k), mix(ha1, hc1, k + 1));
+            b.quad_uvc(
+                [
+                    on(t, i, l0, hl0),
+                    on(t, i, r0, hr0),
+                    on(t, j, r1, hr1),
+                    on(t, j, l1, hl1),
+                ],
+                [
+                    Vec2::new(l0 / tile, v0),
+                    Vec2::new(r0 / tile, v0),
+                    Vec2::new(r1 / tile, v1),
+                    Vec2::new(l1 / tile, v1),
+                ],
+                [tint(i), tint(i), tint(j), tint(j)],
+            );
+        }
     }
 }
 
@@ -415,14 +475,18 @@ fn dirt_road(t: &Track) -> Model {
     let mut paint = Builder::new();
     start_line(&mut paint, t);
     let mut dirt = dirt.finish();
+    drape(&mut dirt, t);
     dirt.material = 1;
     let mut gravel = gravel.finish();
+    drape(&mut gravel, t);
     gravel.material = 0;
     let mut paint = paint.finish();
     paint.material = 2;
     let mut verge = verge.finish();
+    drape(&mut verge, t);
     verge.material = 3;
     let mut marks = ruts(t);
+    drape(&mut marks, t);
     marks.material = 4;
     model(
         vec![gravel, dirt, paint, verge, marks],
@@ -462,10 +526,10 @@ fn b_quad(
 ) {
     b.quad_uvc(
         [
-            v3(t.at(i, lat[0]), y),
-            v3(t.at(i, lat[1]), y),
-            v3(t.at(j, lat[2]), y),
-            v3(t.at(j, lat[3]), y),
+            on(t, i, lat[0], y),
+            on(t, i, lat[1], y),
+            on(t, j, lat[2], y),
+            on(t, j, lat[3], y),
         ],
         [
             Vec2::new(lat[0] / tile, v0),
@@ -495,10 +559,10 @@ fn ruts(t: &Track) -> MeshData {
                 let (l0, l1) = (l(i), l(j));
                 b.quad_uvc(
                     [
-                        v3(t.at(i, l0 - 0.16), 0.045),
-                        v3(t.at(i, l0 + 0.16), 0.045),
-                        v3(t.at(j, l1 + 0.16), 0.045),
-                        v3(t.at(j, l1 - 0.16), 0.045),
+                        on(t, i, l0 - 0.16, 0.045),
+                        on(t, i, l0 + 0.16, 0.045),
+                        on(t, j, l1 + 0.16, 0.045),
+                        on(t, j, l1 - 0.16, 0.045),
                     ],
                     [Vec2::ZERO; 4],
                     [brown(a(i)), brown(a(i)), brown(a(j)), brown(a(j))],
@@ -538,10 +602,10 @@ fn ruts(t: &Track) -> MeshData {
                     );
                     b.quad_uvc(
                         [
-                            v3(t.at(i, l0 - 0.3), 0.046),
-                            v3(t.at(i, l0 + 0.3), 0.046),
-                            v3(t.at(j, l1 + 0.3), 0.046),
-                            v3(t.at(j, l1 - 0.3), 0.046),
+                            on(t, i, l0 - 0.3, 0.046),
+                            on(t, i, l0 + 0.3, 0.046),
+                            on(t, j, l1 + 0.3, 0.046),
+                            on(t, j, l1 - 0.3, 0.046),
                         ],
                         [Vec2::ZERO; 4],
                         [brown(fade(k)), brown(fade(k)), brown(fade(k + 1)), brown(fade(k + 1))],
@@ -564,7 +628,10 @@ fn start_line(paint: &mut Builder, t: &Track) {
             let f = t.tangent(0);
             let o = t.centre(0) + f * (row as f32 * 0.75 - 0.75);
             let nrm = t.normal(0);
-            let p = |lat: f32, lon: f32| v3(o + nrm * lat + f * lon, 0.07);
+            let p = |lat: f32, lon: f32| {
+                let at = o + nrm * lat + f * lon;
+                v3(at, t.height(at, 0) + 0.07)
+            };
             let c = if (k + row) % 2 == 0 {
                 white
             } else {
@@ -644,10 +711,10 @@ pub fn road(t: &Track) -> Model {
                 let (l0, h0) = (s * (HALF + w[0].0), w[0].1);
                 let (l1, h1) = (s * (HALF + w[1].0), w[1].1);
                 paint.quad_up(
-                    v3(t.at(i, l0), h0),
-                    v3(t.at(i, l1), h1),
-                    v3(t.at(j, l1), h1),
-                    v3(t.at(j, l0), h0),
+                    on(t, i, l0, h0),
+                    on(t, i, l1, h1),
+                    on(t, j, l1, h1),
+                    on(t, j, l0, h0),
                     c,
                 );
             }
@@ -660,10 +727,10 @@ pub fn road(t: &Track) -> Model {
                     let back = -t.tangent(i);
                     paint.face(
                         [
-                            v3(t.at(i, l0), 0.03),
-                            v3(t.at(i, l1), 0.03),
-                            v3(t.at(i, l1), h1),
-                            v3(t.at(i, l0), h0),
+                            on(t, i, l0, 0.03),
+                            on(t, i, l1, 0.03),
+                            on(t, i, l1, h1),
+                            on(t, i, l0, h0),
                         ],
                         Vec3::new(back.x, 0.0, back.y),
                         shade(top, 0.6),
@@ -674,14 +741,18 @@ pub fn road(t: &Track) -> Model {
     }
     start_line(&mut paint, t);
     let mut clay = clay.finish();
+    drape(&mut clay, t);
     clay.material = 0;
     let mut tarmac = tarmac.finish();
+    drape(&mut tarmac, t);
     tarmac.material = 1;
     let mut paint = paint.finish();
     paint.material = 2;
     let mut verge = verge.finish();
+    drape(&mut verge, t);
     verge.material = 3;
     let mut marks = skids(t);
+    drape(&mut marks, t);
     marks.material = 4;
     model(
         vec![clay, tarmac, paint, verge, marks],
@@ -736,10 +807,10 @@ fn skids(t: &Track) -> MeshData {
                     let c1 = [0.02, 0.02, 0.02, fade(k + 1)];
                     b.quad_uvc(
                         [
-                            v3(t.at(i, l0 - 0.12), 0.045),
-                            v3(t.at(i, l0 + 0.12), 0.045),
-                            v3(t.at(j, l1 + 0.12), 0.045),
-                            v3(t.at(j, l1 - 0.12), 0.045),
+                            on(t, i, l0 - 0.12, 0.045),
+                            on(t, i, l0 + 0.12, 0.045),
+                            on(t, j, l1 + 0.12, 0.045),
+                            on(t, j, l1 - 0.12, 0.045),
                         ],
                         [Vec2::ZERO; 4],
                         [c0, c0, c1, c1],
@@ -754,12 +825,10 @@ fn skids(t: &Track) -> MeshData {
 /// The grass: a textured grid, tinted in broad patches so the tiling never shows.
 pub fn ground(t: &Track) -> Model {
     let mut b = Builder::new();
-    let (cx, cz) = centre_of(t);
-    let cell = 4.0;
-    let (nx, nz) = (48usize, 42usize);
+    let cell = CELL;
+    let (nx, nz) = CELLS;
     let tile = 7.0;
-    let x0 = cx - nx as f32 * cell * 0.5;
-    let z0 = cz - nz as f32 * cell * 0.5;
+    let (x0, z0) = (t.gx, t.gz);
     // One tint per grid corner, shared by the four cells around it, so the
     // shading is a smooth wash: bright mown grass by the road, darkening into
     // the shade under the woods, with broad soft patches across it.
@@ -784,18 +853,19 @@ pub fn ground(t: &Track) -> Model {
     let at = |i: usize, j: usize| tints[i * (nz + 1) + j];
     for i in 0..nx {
         for j in 0..nz {
-            let (xa, za) = (x0 + i as f32 * cell, z0 + j as f32 * cell);
-            let q = [
-                Vec3::new(xa, 0., za),
-                Vec3::new(xa + cell, 0., za),
-                Vec3::new(xa + cell, 0., za + cell),
-                Vec3::new(xa, 0., za + cell),
-            ];
-            let uv = q.map(|p| Vec2::new(p.x / tile, p.z / tile));
-            b.quad_uvc(
-                q,
+            let q = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)];
+            let uv = q.map(|(a, c)| {
+                Vec2::new((x0 + a as f32 * cell) / tile, (z0 + c as f32 * cell) / tile)
+            });
+            b.quad_uvcn(
+                q.map(|(a, c)| land_corner(t, a, c, 0.0)),
                 uv,
-                [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)],
+                q.map(|(a, c)| {
+                    let shade = hillshade(land_normal(t, a, c));
+                    let tint = at(a, c);
+                    [tint[0] * shade, tint[1] * shade, tint[2] * shade, tint[3]]
+                }),
+                q.map(|(a, c)| land_normal(t, a, c)),
             );
         }
     }
@@ -805,6 +875,23 @@ pub fn ground(t: &Track) -> Model {
         vec![textured_material(0, 0.95)],
         &[texture],
     )
+}
+
+/// A corner of the land grid, `lift` above it.
+fn land_corner(t: &Track, i: usize, j: usize, lift: f32) -> Vec3 {
+    Vec3::new(
+        t.gx + i as f32 * CELL,
+        t.land_node(i as i64, j as i64) + lift,
+        t.gz + j as f32 * CELL,
+    )
+}
+
+/// The land's smooth normal at a grid corner, from its neighbours.
+fn land_normal(t: &Track, i: usize, j: usize) -> Vec3 {
+    let (i, j) = (i as i64, j as i64);
+    let dx = (t.land_node(i + 1, j) - t.land_node(i - 1, j)) / (2.0 * CELL);
+    let dz = (t.land_node(i, j + 1) - t.land_node(i, j - 1)) / (2.0 * CELL);
+    Vec3::new(-dx, 1.0, -dz).normalize()
 }
 
 pub fn centre_of(t: &Track) -> (f32, f32) {
@@ -835,6 +922,10 @@ pub struct Prop {
     pub scale: Vec3,
     /// A tree's crown: radius and height in metres, for fading it out of the way.
     pub crown: Option<(f32, f32)>,
+    /// Tilt along its length (fence sections follow the ground's rise).
+    pub pitch: f32,
+    /// How far it is let into the ground, so it never floats on a slope.
+    pub sink: f32,
 }
 
 impl Prop {
@@ -845,6 +936,8 @@ impl Prop {
             yaw,
             scale,
             crown: None,
+            pitch: 0.0,
+            sink: 0.0,
         }
     }
 }
@@ -861,12 +954,17 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
             let a = t.at(i, s * (t.wall[i] - 0.2));
             let c = t.at(j, s * (t.wall[j] - 0.2));
             let d = c - a;
-            out.push(Prop::new(
-                "fence.model",
-                a,
-                math::atan2(d.y, d.x),
-                Vec3::new(d.length() / 3.0, 1.0, 1.0),
-            ));
+            let rise = t.height(c, j) - t.height(a, i);
+            out.push(Prop {
+                pitch: math::atan(rise / d.length().max(0.1)),
+                sink: 0.05,
+                ..Prop::new(
+                    "fence.model",
+                    a,
+                    math::atan2(d.y, d.x),
+                    Vec3::new(d.length() / 3.0, 1.0, 1.0),
+                )
+            });
             // Red and white boards in front of the fence round the outside of corners.
             // A dirt track leaves the outside of its corners open.
             let room = t.wall[i].min(t.wall[j]) > HALF + RUNOFF + 3.2;
@@ -875,12 +973,17 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
                 let (p, q) = (t.at(i, lat), t.at(j, lat));
                 // The frame always behind the boards, away from the road.
                 let (from, d) = if s > 0.0 { (q, p - q) } else { (p, q - p) };
-                out.push(Prop::new(
-                    "barrier.model",
-                    from,
-                    math::atan2(d.y, d.x),
-                    Vec3::new(d.length() / 3.0, 1.0, 1.0),
-                ));
+                let rise = t.height(from + d, i) - t.height(from, i);
+                out.push(Prop {
+                    pitch: math::atan(rise / d.length().max(0.1)),
+                    sink: 0.05,
+                    ..Prop::new(
+                        "barrier.model",
+                        from,
+                        math::atan2(d.y, d.x),
+                        Vec3::new(d.length() / 3.0, 1.0, 1.0),
+                    )
+                });
             }
             i += every;
         }
@@ -957,6 +1060,7 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
         };
         out.push(Prop {
             crown: Some((radius * scale * 1.15, height * scale)),
+            sink: 0.25,
             ..Prop::new(
                 model,
                 p,
@@ -1065,6 +1169,7 @@ fn rocky(w: &World, t: &Track, quality: u32, out: &mut Vec<Prop>) {
         placed.push((p, radius * scale * 0.85));
         out.push(Prop {
             crown: Some((radius * scale * 1.15, height * scale)),
+            sink: 0.25,
             ..Prop::new(
                 model,
                 p,
@@ -1155,6 +1260,7 @@ pub fn flowers(w: &World, t: &Track) -> MeshData {
             blossom(
                 &mut b,
                 p,
+                t.height_any(p),
                 w.rand(0.11..0.17),
                 w.rand(0.0..1.0),
                 petal,
@@ -1166,8 +1272,8 @@ pub fn flowers(w: &World, t: &Track) -> MeshData {
 }
 
 /// One flower lying on the grass: a ring of round-tipped petals and a raised heart.
-fn blossom(b: &mut Builder, p: Vec2, r: f32, turn: f32, petal: [f32; 4], heart: [f32; 4]) {
-    let y = 0.05;
+fn blossom(b: &mut Builder, p: Vec2, ground: f32, r: f32, turn: f32, petal: [f32; 4], heart: [f32; 4]) {
+    let y = ground + 0.05;
     let at = |a: f32, d: f32, h: f32| {
         let (s, c) = math::sin_cos(a);
         Vec3::new(p.x + c * d, h, p.y + s * d)
@@ -1208,33 +1314,29 @@ pub fn marker() -> MeshData {
 
 /// Where the ground (and the baked shade over it) lies: its centre and full size.
 pub fn ground_rect(t: &Track) -> (Vec2, Vec2) {
-    let (cx, cz) = centre_of(t);
-    (Vec2::new(cx, cz), Vec2::new(48.0 * 4.0, 42.0 * 4.0))
+    let size = Vec2::new(CELLS.0 as f32 * CELL, CELLS.1 as f32 * CELL);
+    (Vec2::new(t.gx, t.gz) + size * 0.5, size)
 }
 
 /// The baked shade: one alpha-blended quad over the whole ground carrying the
 /// trees' and fences' low-sun shadows, painted offline by art/src/shade.py.
 pub fn shade_overlay(t: &Track) -> Model {
-    let (c, size) = ground_rect(t);
     let mut b = Builder::new();
-    let (x0, z0) = (c.x - size.x / 2.0, c.y - size.y / 2.0);
-    let (x1, z1) = (c.x + size.x / 2.0, c.y + size.y / 2.0);
-    b.quad_uv(
-        [
-            Vec3::new(x0, 0.09, z0),
-            Vec3::new(x1, 0.09, z0),
-            Vec3::new(x1, 0.09, z1),
-            Vec3::new(x0, 0.09, z1),
-        ],
-        // Image rows run north to south: v grows with z.
-        [
-            Vec2::new(0., 0.),
-            Vec2::new(1., 0.),
-            Vec2::new(1., 1.),
-            Vec2::new(0., 1.),
-        ],
-        [1.0; 4],
-    );
+    let (nx, nz) = CELLS;
+    // Draped over the land grid; under the road the land is `SINK` below it,
+    // so this lies about 9 cm over the road as it always has.
+    for i in 0..nx {
+        for j in 0..nz {
+            let q = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)];
+            b.quad_uvcn(
+                q.map(|(a, c)| land_corner(t, a, c, SINK + 0.09)),
+                // Image rows run north to south: v grows with z.
+                q.map(|(a, c)| Vec2::new(a as f32 / nx as f32, c as f32 / nz as f32)),
+                [[1.0; 4]; 4],
+                q.map(|(a, c)| land_normal(t, a, c)),
+            );
+        }
+    }
     let texture = format!("shade-{}.tex", t.id);
     model(
         vec![b.finish()],
