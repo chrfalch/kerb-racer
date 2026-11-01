@@ -12,7 +12,7 @@ use track::Track;
 #[derive(Args)]
 pub struct Options {
     pub seed: u64,
-    /// Which circuit: 0 Pine Hollow, 1 Fern Loop, 2 Kerb Ring.
+    /// Which circuit: 0 Pine Hollow, 1 Fern Loop, 2 Kerb Ring, 3 Gravel Pit (dirt).
     pub track: u32,
     pub laps: u32,
     /// Graphics: 0 low (no undergrowth), 1 medium (baked shadows, the default), 2 high (real-time sun shadows, haze and bloom).
@@ -237,10 +237,14 @@ impl Game for KerbRacers {
         "asphalt.tex",
         "grass.tex",
         "clay.tex",
+        "dirt.tex",
+        "gravel.tex",
+        "scree.tex",
         "blob.tex",
         "shade-0.tex",
         "shade-1.tex",
         "shade-2.tex",
+        "shade-3.tex",
     ];
     type Args = Options;
     fn actions() -> Actions {
@@ -272,11 +276,14 @@ impl Game for KerbRacers {
             .generated_model(&format!("road-{id}.model"), scenery::road(&t))
             .expect("road");
         w.spawn_named("road", (Transform::default(), road));
-        let flowers = scenery::flowers(w, &t);
-        let flowers = w
-            .generated(&format!("flowers-{id}.model"), flowers)
-            .expect("flowers");
-        w.spawn_named("flowers", (Transform::default(), flowers, Ambient));
+        // No flowers on the dirt track's scree.
+        if !t.dirt {
+            let flowers = scenery::flowers(w, &t);
+            let flowers = w
+                .generated(&format!("flowers-{id}.model"), flowers)
+                .expect("flowers");
+            w.spawn_named("flowers", (Transform::default(), flowers, Ambient));
+        }
         for prop in scenery::props(w, &t, args.quality) {
             let e = w.spawn((
                 Transform {
@@ -339,7 +346,7 @@ impl Game for KerbRacers {
                     },
                 ),
             );
-            puffs(w, e, &name_of(k));
+            puffs(w, e, &name_of(k), t.dirt);
             let (front, rear, track, rims) = wheel_layout(k);
             for (x, is_front) in [(front, true), (rear, false)] {
                 // Blender's left (+Y) is the game's -Z.
@@ -537,8 +544,10 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
             rotation: Quat::from_rotation_y(-body.car.heading),
             scale: Vec3::ONE,
         };
-        let smoke = body.car.sliding && body.car.surface != car::GRASS && speed > 5.0;
-        let dust = body.car.surface != car::ASPHALT && speed > 3.0;
+        // On dirt every car trails dust; there is no rubber to smoke.
+        let smoke =
+            !t.dirt && body.car.sliding && body.car.surface != car::GRASS && speed > 5.0;
+        let dust = (t.dirt || body.car.surface != car::ASPHALT) && speed > 3.0;
         for (suffix, on) in [("smoke", smoke), ("dust", dust)] {
             let target = format!("{name}-{suffix}");
             // Read first: a mutable borrow marks the row written even when nothing changes.
@@ -575,7 +584,13 @@ fn turn_wheels(w: &mut World, cars: &[Entity], bodies: &[Body]) {
 
 /// Two trails behind each car: white tyre smoke for a slide on the road,
 /// brown dust off it. Both stay where they were born and start switched off.
-fn puffs(w: &mut World, car: Entity, name: &str) {
+/// On a dirt track the dust is a pale ochre plume, thicker and longer-lived.
+fn puffs(w: &mut World, car: Entity, name: &str, dirt: bool) {
+    let dust = if dirt {
+        ([0.78, 0.64, 0.45, 0.5], [0.82, 0.72, 0.56, 0.0], [0.8, 3.2])
+    } else {
+        ([0.62, 0.45, 0.28, 0.42], [0.66, 0.55, 0.4, 0.0], [0.6, 2.2])
+    };
     for (suffix, birth, death, size) in [
         (
             "smoke",
@@ -583,12 +598,7 @@ fn puffs(w: &mut World, car: Entity, name: &str) {
             [0.85, 0.85, 0.85, 0.0],
             [0.45, 1.5],
         ),
-        (
-            "dust",
-            [0.62, 0.45, 0.28, 0.42],
-            [0.66, 0.55, 0.4, 0.0],
-            [0.6, 2.2],
-        ),
+        ("dust", dust.0, dust.1, dust.2),
     ] {
         w.spawn_named(
             format!("{name}-{suffix}"),
@@ -596,8 +606,8 @@ fn puffs(w: &mut World, car: Entity, name: &str) {
                 Transform::at(-1.5, 0.25, 0.0),
                 Emitter {
                     shape: emitter::Shape::Sphere(0.35),
-                    rate: 18.0,
-                    lifetime: 0.85,
+                    rate: if dirt && suffix == "dust" { 26.0 } else { 18.0 },
+                    lifetime: if dirt && suffix == "dust" { 1.3 } else { 0.85 },
                     speed: 0.8,
                     spread: 1.3,
                     gravity: Vec3::new(0.0, 0.7, 0.0),
@@ -836,6 +846,8 @@ fn hud(w: &World) {
     let race = w.resource::<Race>().clone();
     let t = w.resource::<Track>();
     let name = track::layout(t.id).name.to_string();
+    // On dirt every corner is a slide: the badge would never go out.
+    let dirt = t.dirt;
     let order = standings(w);
     let radar = radar(w, &t, &order);
     drop(t);
@@ -922,7 +934,7 @@ fn hud(w: &World) {
         speed: (speed * 3.6).round() as u32,
         gas: player.gas > 0.0,
         brake: player.brake,
-        sliding: player.sliding,
+        sliding: player.sliding && !dirt,
         off: player.surface == car::GRASS,
         standings: rows,
         radar,

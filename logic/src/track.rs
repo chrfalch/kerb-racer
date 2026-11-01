@@ -15,17 +15,22 @@ pub const PLAN_GRIP: f32 = 14.5;
 pub const PLAN_BRAKE: f32 = 17.0;
 /// Top speed on the straight (m/s).
 pub const VMAX: f32 = 31.0;
+/// On dirt the planner expects this share of its asphalt grip and braking.
+pub const PLAN_DIRT: f32 = 0.7;
 
 pub struct Layout {
     pub name: &'static str,
+    /// A loose dirt road with gravel run-off instead of asphalt and kerbs.
+    pub dirt: bool,
     /// Metres from the first point to the start line, so the grid sits on a straight.
     pub start: f32,
     pub points: &'static [(f32, f32)],
 }
 
-pub const LAYOUTS: [Layout; 3] = [
+pub const LAYOUTS: [Layout; 4] = [
     Layout {
         name: "Pine Hollow",
+        dirt: false,
         start: 42.,
         points: &[
             (-34., 22.),
@@ -49,6 +54,7 @@ pub const LAYOUTS: [Layout; 3] = [
     },
     Layout {
         name: "Fern Loop",
+        dirt: false,
         start: 44.,
         points: &[
             (-38., 14.),
@@ -68,6 +74,7 @@ pub const LAYOUTS: [Layout; 3] = [
     },
     Layout {
         name: "Kerb Ring",
+        dirt: false,
         start: 40.,
         points: &[
             (-30., 18.),
@@ -87,6 +94,30 @@ pub const LAYOUTS: [Layout; 3] = [
             (-40., 0.),
         ],
     },
+    Layout {
+        name: "Gravel Pit",
+        dirt: true,
+        start: 24.,
+        points: &[
+            (-31., 24.),
+            (-33., 4.),
+            (-31., -20.),
+            (-26., -44.),
+            (-14., -58.),
+            (2., -54.),
+            (4., -40.),
+            (16., -32.),
+            (14., -18.),
+            (26., -10.),
+            (42., -8.),
+            (46., 8.),
+            (34., 22.),
+            (18., 20.),
+            (8., 32.),
+            (-8., 40.),
+            (-24., 40.),
+        ],
+    },
 ];
 
 pub fn layout(track: u32) -> &'static Layout {
@@ -98,6 +129,8 @@ pub fn layout(track: u32) -> &'static Layout {
 #[derive(Clone, Debug, Default, Resource)]
 pub struct Track {
     pub id: u32,
+    /// Loose dirt and gravel rather than asphalt (see `Layout::dirt`).
+    pub dirt: bool,
     pub x: Vec<f32>,
     pub z: Vec<f32>,
     /// Unit left normal at each sample.
@@ -247,16 +280,18 @@ pub fn build(id: u32) -> Track {
         }
     }
     let path: Vec<Vec2> = (0..n).map(|i| centre[i] + normals[i] * line[i]).collect();
+    let dirt = layout(id).dirt;
+    let feel = if dirt { PLAN_DIRT } else { 1.0 };
     let mut speed: Vec<f32> = (0..n)
         .map(|i| {
             let r = radius(path[(i + n - 5) % n], path[i], path[(i + 5) % n]).abs();
-            math::sqrt(PLAN_GRIP * r).min(VMAX)
+            math::sqrt(PLAN_GRIP * feel * r).min(VMAX)
         })
         .collect();
     for _ in 0..2 {
         for i in (0..n).rev() {
             let next = speed[(i + 1) % n];
-            let reachable = math::sqrt(next * next + 2. * PLAN_BRAKE * step);
+            let reachable = math::sqrt(next * next + 2. * PLAN_BRAKE * feel * step);
             speed[i] = speed[i].min(reachable);
         }
     }
@@ -286,6 +321,7 @@ pub fn build(id: u32) -> Track {
 
     Track {
         id,
+        dirt,
         x: centre.iter().map(|p| p.x).collect(),
         z: centre.iter().map(|p| p.y).collect(),
         nx: normals.iter().map(|p| p.x).collect(),
