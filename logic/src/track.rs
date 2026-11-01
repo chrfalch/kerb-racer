@@ -85,11 +85,16 @@ pub const LAYOUTS: [Layout; 4] = [
             (-36., -14.),
             (-44., 4.),
         ],
-        // Placeholder elevation to exercise the physics; the real profiles come next.
+        // A forest valley: up through the first loop, a blind crest that goes
+        // light into the S-bends, a climb to the hilltop hairpin, then the
+        // long run down the back straight into a compression, and a dip
+        // through the fast west kink.
         lifts: &[
-            Lift::Slope { at: 108., len: 42., rise: 5.0 },
-            Lift::Slope { at: 182., len: 54., rise: -5.0 },
-            Lift::Crest { at: 318., up: 14., down: 15., h: 1.2 },
+            Lift::Slope { at: 14., len: 40., rise: 2.0 },
+            Lift::Crest { at: 56., up: 8., down: 11., h: 0.8 },
+            Lift::Slope { at: 108., len: 36., rise: 3.0 },
+            Lift::Slope { at: 178., len: 50., rise: -5.0 },
+            Lift::Crest { at: 258., up: 14., down: 14., h: -0.6 },
         ],
         hills: 3.0,
     },
@@ -112,8 +117,18 @@ pub const LAYOUTS: [Layout; 4] = [
             (-30., -26.),
             (-44., -8.),
         ],
-        lifts: &[],
-        hills: 0.0,
+        // Rolling hills: a banked opening sweeper, a dip through the fast right,
+        // a rise after the hairpin and two crests down the west side you just
+        // skim flat out, the second going light into the corner.
+        lifts: &[
+            Lift::Bank { at: 18., len: 42., slope: 0.12 },
+            Lift::Slope { at: 104., len: 24., rise: 2.0 },
+            Lift::Crest { at: 150., up: 12., down: 14., h: -0.7 },
+            Lift::Crest { at: 186., up: 14., down: 16., h: 0.8 },
+            Lift::Crest { at: 218., up: 13., down: 15., h: 0.7 },
+            Lift::Slope { at: 238., len: 24., rise: -2.0 },
+        ],
+        hills: 2.5,
     },
     Layout {
         name: "Kerb Ring",
@@ -136,8 +151,15 @@ pub const LAYOUTS: [Layout; 4] = [
             (-38., -28.),
             (-40., 0.),
         ],
-        lifts: &[],
-        hills: 0.0,
+        // Flat and technical, but for one feature: the middle loop climbs to a
+        // hairpin on a plateau and drops out of it down the straight into an
+        // off-camber right that punishes early throttle.
+        lifts: &[
+            Lift::Slope { at: 82., len: 22., rise: 1.6 },
+            Lift::Slope { at: 116., len: 30., rise: -1.6 },
+            Lift::Bank { at: 128., len: 28., slope: -0.08 },
+        ],
+        hills: 1.5,
     },
     Layout {
         name: "Gravel Pit",
@@ -162,13 +184,17 @@ pub const LAYOUTS: [Layout; 4] = [
             (-8., 40.),
             (-24., 40.),
         ],
-        // Placeholder elevation to exercise the physics; the real profiles come next.
+        // A quarry: bumps down the start straight that skip the cars, a drop
+        // into the pit and the climb out, a jump onto the back straight, a
+        // banked berm round the last hairpin and a hop over the brow before
+        // the line.
         lifts: &[
-            Lift::Whoops { at: 2., len: 30., wave: 7.5, h: 0.4 },
+            Lift::Whoops { at: 4., len: 30., wave: 7.5, h: 0.4 },
             Lift::Slope { at: 126., len: 26., rise: -3.5 },
             Lift::Slope { at: 162., len: 28., rise: 3.5 },
             Lift::Crest { at: 214., up: 7., down: 12., h: 1.0 },
-            Lift::Bank { at: 246., len: 26., slope: 0.14 },
+            Lift::Bank { at: 246., len: 26., slope: 0.16 },
+            Lift::Crest { at: 276., up: 6., down: 9., h: 0.6 },
         ],
         hills: 3.5,
     },
