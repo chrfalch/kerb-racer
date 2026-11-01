@@ -7,6 +7,10 @@
 # tile's edge. Then make the smaller sizes with
 #   sips -z 512 512 assets/icon/icon-1024.png --out assets/icon/icon-512.png
 #   sips -z 192 192 assets/icon/icon-1024.png --out assets/icon/icon-192.png
+# Also writes iOS's full-bleed icon, icon/KerbRacers.icon (app.json's
+# host.ios.icon): the same scene framed a little wider so the smoke clears the
+# rounded corners, as two Icon Composer layers, the track (opaque) and the car
+# and smoke above it, so the system's depth and highlights lift the car.
 import bpy, math, os, random
 import numpy as np
 from mathutils import Vector, Euler
@@ -14,6 +18,7 @@ from mathutils import Vector, Euler
 HERE = os.path.dirname(os.path.abspath(__file__))
 A = os.path.join(HERE, "..", "models") + "/"
 OUT = os.path.join(HERE, "..", "..", "assets", "icon", "icon-1024.png")
+IOS = os.path.join(HERE, "..", "..", "icon", "KerbRacers.icon", "Assets")
 RES = 1024
 bpy.ops.wm.read_factory_settings(use_empty=True)
 sc=bpy.context.scene
@@ -138,3 +143,23 @@ out.pixels[:] = np.dstack([rgb, a]).ravel()
 out.filepath_raw = OUT
 out.file_format = "PNG"
 out.save()
+
+# iOS: full bleed, a wider lens; the track opaque, then the car alone again.
+def save(px, path, alpha):
+    img = bpy.data.images.new(os.path.basename(path), RES, RES, alpha=alpha)
+    img.pixels[:] = (px if alpha else np.dstack([px[..., :3], np.ones((RES, RES), np.float32)])).ravel()
+    img.filepath_raw = path
+    img.file_format = "PNG"
+    img.save()
+
+cd.lens = 68
+sc.render.film_transparent = False
+ground = [o for o in sc.objects if o.is_holdout]
+for o in ground:
+    o.is_holdout = False
+track = render("ios-track")
+sc.render.film_transparent = True
+for o in ground:
+    o.is_holdout = True
+save(track, os.path.join(IOS, "track.png"), False)
+save(render("ios-car"), os.path.join(IOS, "car.png"), True)
