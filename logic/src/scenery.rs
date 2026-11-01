@@ -190,7 +190,21 @@ fn drape(m: &mut MeshData, t: &Track) {
         let g = t.gradient(at, i);
         let n = Vec3::new(-g.x, 1.0, -g.y).normalize();
         m.normals[k * 3..k * 3 + 3].copy_from_slice(&[n.x, n.y, n.z]);
+        let shade = hillshade(n);
+        for c in &mut m.colors[k * 4..k * 4 + 3] {
+            *c *= shade;
+        }
     }
+}
+
+/// Toward the low western sun (the "sun" light in `light`).
+const SUN: Vec3 = Vec3::new(-0.888, 0.304, -0.355);
+
+/// From straight above a hill hardly shows, so paint the light on: ground
+/// tilted toward the sun a touch brighter, away from it darker, on top of
+/// what the lighting already does.
+fn hillshade(n: Vec3) -> f32 {
+    (1.0 + 1.6 * (n.dot(SUN) - SUN.y)).clamp(0.55, 1.35)
 }
 
 /// The point `lat` metres left of sample `i`, `y` above the ground there.
@@ -232,7 +246,10 @@ fn textured(
     tile: f32,
     tint: impl Fn(usize) -> [f32; 4],
 ) {
-    textured_strips(b, t, from, to, 1, y, tile, |i, _| tint(i));
+    // Cut across every couple of metres, so a wide one follows a banked or
+    // crowned road and the land on the inside of a hairpin.
+    let strips = (((to - from).abs() / 2.0).ceil() as usize).max(1);
+    textured_strips(b, t, from, to, strips, y, tile, |i, _| tint(i));
 }
 
 /// A textured ribbon cut into `strips` across, tinted at every corner by
@@ -328,21 +345,30 @@ fn textured_edges(
         let (v0, v1) = (along(i), along(i) + tiles / n as f32);
         let ((a0, ha0), (c0, hc0)) = edge(i);
         let ((a1, ha1), (c1, hc1)) = edge(j);
-        b.quad_uvc(
-            [
-                on(t, i, a0, ha0),
-                on(t, i, c0, hc0),
-                on(t, j, c1, hc1),
-                on(t, j, a1, ha1),
-            ],
-            [
-                Vec2::new(a0 / tile, v0),
-                Vec2::new(c0 / tile, v0),
-                Vec2::new(c1 / tile, v1),
-                Vec2::new(a1 / tile, v1),
-            ],
-            [tint(i), tint(i), tint(j), tint(j)],
-        );
+        // Cut across every couple of metres, so it follows the ground.
+        let strips = (((c0 - a0).abs().max((c1 - a1).abs()) / 2.0).ceil() as usize).max(1);
+        let mix = |a: f32, c: f32, k: usize| a + (c - a) * k as f32 / strips as f32;
+        for k in 0..strips {
+            let (l0, r0) = (mix(a0, c0, k), mix(a0, c0, k + 1));
+            let (l1, r1) = (mix(a1, c1, k), mix(a1, c1, k + 1));
+            let (hl0, hr0) = (mix(ha0, hc0, k), mix(ha0, hc0, k + 1));
+            let (hl1, hr1) = (mix(ha1, hc1, k), mix(ha1, hc1, k + 1));
+            b.quad_uvc(
+                [
+                    on(t, i, l0, hl0),
+                    on(t, i, r0, hr0),
+                    on(t, j, r1, hr1),
+                    on(t, j, l1, hl1),
+                ],
+                [
+                    Vec2::new(l0 / tile, v0),
+                    Vec2::new(r0 / tile, v0),
+                    Vec2::new(r1 / tile, v1),
+                    Vec2::new(l1 / tile, v1),
+                ],
+                [tint(i), tint(i), tint(j), tint(j)],
+            );
+        }
     }
 }
 
@@ -834,7 +860,11 @@ pub fn ground(t: &Track) -> Model {
             b.quad_uvcn(
                 q.map(|(a, c)| land_corner(t, a, c, 0.0)),
                 uv,
-                q.map(|(a, c)| at(a, c)),
+                q.map(|(a, c)| {
+                    let shade = hillshade(land_normal(t, a, c));
+                    let tint = at(a, c);
+                    [tint[0] * shade, tint[1] * shade, tint[2] * shade, tint[3]]
+                }),
                 q.map(|(a, c)| land_normal(t, a, c)),
             );
         }

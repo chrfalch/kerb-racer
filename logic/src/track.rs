@@ -87,11 +87,11 @@ pub const LAYOUTS: [Layout; 4] = [
         ],
         // Placeholder elevation to exercise the physics; the real profiles come next.
         lifts: &[
-            Lift::Slope { at: 110., len: 40., rise: 3.0 },
-            Lift::Slope { at: 185., len: 50., rise: -3.0 },
-            Lift::Crest { at: 318., up: 15., down: 15., h: 0.6 },
+            Lift::Slope { at: 108., len: 42., rise: 5.0 },
+            Lift::Slope { at: 182., len: 54., rise: -5.0 },
+            Lift::Crest { at: 318., up: 14., down: 15., h: 1.2 },
         ],
-        hills: 1.2,
+        hills: 3.0,
     },
     Layout {
         name: "Fern Loop",
@@ -164,13 +164,13 @@ pub const LAYOUTS: [Layout; 4] = [
         ],
         // Placeholder elevation to exercise the physics; the real profiles come next.
         lifts: &[
-            Lift::Whoops { at: 2., len: 28., wave: 7., h: 0.35 },
-            Lift::Slope { at: 132., len: 28., rise: -2.0 },
-            Lift::Slope { at: 174., len: 28., rise: 2.0 },
-            Lift::Crest { at: 208., up: 7., down: 10., h: 0.7 },
-            Lift::Bank { at: 248., len: 22., slope: 0.1 },
+            Lift::Whoops { at: 2., len: 30., wave: 7.5, h: 0.4 },
+            Lift::Slope { at: 126., len: 26., rise: -3.5 },
+            Lift::Slope { at: 162., len: 28., rise: 3.5 },
+            Lift::Crest { at: 214., up: 7., down: 12., h: 1.0 },
+            Lift::Bank { at: 246., len: 26., slope: 0.14 },
         ],
-        hills: 1.5,
+        hills: 3.5,
     },
 ];
 
@@ -495,21 +495,27 @@ fn land(t: &Track, rolling: f32) -> (f32, f32, Vec<f32>) {
             rest[k] = level + rolling * (0.7 * hills(p, 38.0, 1) + 0.3 * hills(p, 17.0, 2));
             let (near, _) = t.locate_all(p);
             let (a, b, u, lat) = t.frame(p, near);
-            // Pin under the road plane wherever it holds (a little past the run-off).
+            // Pin under the road plane wherever it holds (a little past the
+            // run-off). On the inside of a tight corner, where it doesn't, pin
+            // to the nearest sample's height: the grid smooths the steps.
             let reach = t.reach_at(a, b, u, lat);
-            let pinned = if reach < BAND { reach } else { BAND + 0.6 };
-            if lat.abs() <= pinned {
+            let off = (p - t.centre(near)).length();
+            if lat.abs() <= reach.min(BAND + 0.6) {
                 fixed[k] = true;
                 h[k] = t.road_height(a, b, u, lat) - SINK;
+            } else if off <= BAND + 0.6 {
+                fixed[k] = true;
+                h[k] = t.y[near] - SINK;
             } else {
                 h[k] = rest[k];
             }
         }
     }
-    // How strongly the land pulls back to its own hills: about 10 m from the
-    // road it is mostly its own.
-    let pull = 0.05;
-    for _ in 0..220 {
+    // How strongly the land pulls back to its own hills: about 15 m from the
+    // road it is mostly its own, so the banks down from a raised road (or up
+    // from a sunken one) stay gentle enough to drive over.
+    let pull = 0.02;
+    for _ in 0..400 {
         for i in 0..=nx {
             for j in 0..=nz {
                 let k = i * rows + j;
@@ -681,7 +687,9 @@ pub fn build(id: u32) -> Track {
             let r = radius(path[(i + n - 5) % n], path[i], path[(i + 5) % n]).abs();
             let grip = PLAN_GRIP * feel * r;
             let vb = (0..5).map(|k| vbend[(i + n + k - 2) % n]).sum::<f32>() / 5.0;
-            let denom = 1.0 - grip * vb / G;
+            // (Only where the corner needs the grip: flat out over a crest on
+            // a straight just flies, which the jump check below allows for.)
+            let denom = if r > 120.0 { 1.0 } else { 1.0 - grip * vb / G };
             let v2 = if denom > 1.0 / 1.4 { grip / denom } else { grip * 1.4 };
             math::sqrt(v2).min(VMAX)
         })

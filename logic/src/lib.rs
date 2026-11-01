@@ -544,7 +544,7 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
             }
         }
     }
-    car::collide(&mut list);
+    car::collide(&t, &mut list);
     turn_wheels(w, &entities, &list);
     let shake = list
         .iter()
@@ -763,7 +763,9 @@ fn camera(w: &mut World, snap: bool) {
         math::sin(now * 61.0 + 2.1),
     ) * shake;
     let mut cam = w.require_mut::<Transform>("camera");
-    *cam = Transform::at(focus.x, focus.y + 33.0, focus.z + 24.0).looking_at(focus, Vec3::Y);
+    // A little lower and further back than straight down, so hills and jumps
+    // show as depth as well as light.
+    *cam = Transform::at(focus.x, focus.y + 30.0, focus.z + 27.0).looking_at(focus, Vec3::Y);
     cam.position += jolt;
 }
 

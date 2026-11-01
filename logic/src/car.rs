@@ -101,6 +101,9 @@ pub const WHEEL_BRAKE: f32 = 70.0;
 /// The road has to fall away this much faster (m/s) than gravity can pull
 /// the car down before its wheels leave the ground.
 pub const LIFT_OFF: f32 = 0.05;
+/// The most upward acceleration (m/s²) the ground can give the body; the
+/// suspension takes the rest.
+pub const SOAK: f32 = 40.0;
 /// Ticks in the air before it counts as a jump (for the HUD and the camera).
 pub const JUMP_TICKS: u32 = 12;
 
@@ -362,7 +365,9 @@ fn vertical(track: &Track, body: &mut Body, slope: Vec2, dt: f32) {
             let lift = (follow - car.vy) / dt;
             let load = ((G + lift) / G).clamp(0.3, 1.6);
             car.load += (load - car.load) * (dt * 14.0).min(1.0);
-            car.vy = follow;
+            // The suspension soaks up a sudden ramp (a bank, a kerb of land):
+            // the body only gains upward speed so fast, so it isn't flung.
+            car.vy = follow.min(car.vy + SOAK * dt);
             car.y = ground;
         }
     } else {
@@ -446,7 +451,7 @@ fn fence(track: &Track, body: &mut Body) {
         return;
     }
     let out = track.normal(i) * side.signum();
-    body.p -= out * (side.abs() - limit);
+    shove(track, body, -out * (side.abs() - limit));
     body.car.side = limit.copysign(side);
     let v = body.v();
     let into = v.dot(out);
@@ -455,8 +460,20 @@ fn fence(track: &Track, body: &mut Body) {
     }
 }
 
+/// Move a car without it travelling there: a fence or another car pushing it
+/// aside. On the ground it stays on the ground, rather than the step up or
+/// down reading as a ramp it drove over at speed.
+fn shove(track: &Track, body: &mut Body, by: Vec2) {
+    let i = body.car.idx as usize;
+    let before = track.height(body.p, i);
+    body.p += by;
+    if !body.car.air {
+        body.car.y += track.height(body.p, i) - before;
+    }
+}
+
 /// Push overlapping cars apart and trade the closing speed between them.
-pub fn collide(bodies: &mut [Body]) {
+pub fn collide(track: &Track, bodies: &mut [Body]) {
     for a in 0..bodies.len() {
         for b in a + 1..bodies.len() {
             // A car in the air sails over one on the ground.
@@ -474,8 +491,8 @@ pub fn collide(bodies: &mut [Body]) {
                     }
                     let n = d / dist;
                     let overlap = 2.0 * BODY_R - dist;
-                    bodies[a].p -= n * overlap * 0.5;
-                    bodies[b].p += n * overlap * 0.5;
+                    shove(track, &mut bodies[a], -n * overlap * 0.5);
+                    shove(track, &mut bodies[b], n * overlap * 0.5);
                     let closing = (bodies[b].v() - bodies[a].v()).dot(n);
                     if closing < 0.0 {
                         let j = -closing * 0.6;
