@@ -3,6 +3,7 @@
     "name": "Kerb Racers",
     "id": "com.chrfalch.kerb-racers"
   },
+  "audio_session": "playback",
   "game": {
     "audio": true,
     "assets": true,
