@@ -190,12 +190,29 @@ fn wheels_roll_with_the_road_and_lock_under_braking() {
 /// that casts a baked shadow, in setup's order.
 fn casters(game: &Sim<KerbRacers>) -> String {
     let w = game.world();
-    let dirt = w.resource::<Track>().dirt;
-    let (centre, size) = kerb_racers_logic::scenery::ground_rect(&w.resource::<Track>());
+    let t = w.resource::<Track>();
+    let dirt = t.dirt;
+    let (centre, size) = kerb_racers_logic::scenery::ground_rect(&t);
+    // The land's corner heights, a row per x: shadows fall on hills and into
+    // hollows, not on a flat plane.
+    let (nx, nz) = track::CELLS;
+    let rows: Vec<String> = (0..=nx as i64)
+        .map(|i| {
+            let row: Vec<String> = (0..=nz as i64)
+                .map(|j| format!("{:.3}", t.land_node(i, j)))
+                .collect();
+            format!("[{}]", row.join(", "))
+        })
+        .collect();
     let mut out = format!(
-        "[\n  {{\"kind\": \"ground\", \"x\": {:.3}, \"z\": {:.3}, \"w\": {:.3}, \"h\": {:.3}}},\n",
-        centre.x, centre.y, size.x, size.y
+        "[\n  {{\"kind\": \"ground\", \"x\": {:.3}, \"z\": {:.3}, \"w\": {:.3}, \"h\": {:.3}, \"land\": [\n    {}\n  ]}},\n",
+        centre.x,
+        centre.y,
+        size.x,
+        size.y,
+        rows.join(",\n    ")
     );
+    drop(t);
     for (_, (pose, mesh)) in w
         .query::<(&exact_game::Transform, &exact_game::Mesh)>()
         .iter()
@@ -211,15 +228,15 @@ fn casters(game: &Sim<KerbRacers>) -> String {
         }
         if rock {
             out += &format!(
-                "  {{\"kind\": \"rock\", \"x\": {:.3}, \"z\": {:.3}, \"scale\": {:.3}, \"h\": {:.3}}},\n",
-                pose.position.x, pose.position.z, pose.scale.x, pose.scale.y
+                "  {{\"kind\": \"rock\", \"x\": {:.3}, \"y\": {:.3}, \"z\": {:.3}, \"scale\": {:.3}, \"h\": {:.3}}},\n",
+                pose.position.x, pose.position.y, pose.position.z, pose.scale.x, pose.scale.y
             );
             continue;
         }
         let along = pose.rotation * exact_game::Vec3::X * pose.scale.x;
         out += &format!(
-            "  {{\"kind\": \"{kind}\", \"x\": {:.3}, \"z\": {:.3}, \"scale\": {:.3}, \"dx\": {:.3}, \"dz\": {:.3}}},\n",
-            pose.position.x, pose.position.z, pose.scale.y, along.x, along.z
+            "  {{\"kind\": \"{kind}\", \"x\": {:.3}, \"y\": {:.3}, \"z\": {:.3}, \"scale\": {:.3}, \"dx\": {:.3}, \"dz\": {:.3}}},\n",
+            pose.position.x, pose.position.y, pose.position.z, pose.scale.y, along.x, along.z
         );
     }
     out.truncate(out.len() - 2);

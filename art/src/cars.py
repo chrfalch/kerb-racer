@@ -345,58 +345,11 @@ def fender(m, x, y, width, skin):
     return o
 
 
-def shadow(m):
-    """A soft dark blob under the car (vertex alpha, blended), so it sits on the road."""
-    mat = bpy.data.materials.new("contact")
-    mat.use_nodes = True
-    mat.blend_method = "BLEND"
-    nodes, links = mat.node_tree.nodes, mat.node_tree.links
-    p = nodes["Principled BSDF"]
-    p.inputs["Base Color"].default_value = (0.0, 0.0, 0.0, 1.0)
-    p.inputs["Roughness"].default_value = 1.0
-    attr = nodes.new("ShaderNodeVertexColor")
-    attr.layer_name = "Col"
-    links.new(attr.outputs["Alpha"], p.inputs["Alpha"])
-    bm = bmesh.new()
-    col = bm.loops.layers.color.new("Col")  # becomes a corner byte colour on to_mesh
-    centre = bm.verts.new((0, 0, 0.012))
-    rings = []
-    for scale, alpha in ((0.62, 0.62), (1.0, 0.0)):
-        ring = []
-        for k in range(20):
-            a = k * math.tau / 20
-            c, s = math.cos(a), math.sin(a)
-            # A rounded rectangle a little larger than the car's plan.
-            x = math.copysign(abs(c) ** 0.5, c) * (LENGTH / 2 + 0.3) * scale
-            y = math.copysign(abs(s) ** 0.5, s) * (WIDTH / 2 + 0.25) * scale
-            ring.append((bm.verts.new((x, y, 0.012)), alpha))
-        rings.append(ring)
-    def tint(f, alphas):
-        for loop, a in zip(f.loops, alphas):
-            loop[col] = (0, 0, 0, a)
-    inner = rings[0]
-    for k in range(20):
-        j = (k + 1) % 20
-        tint(bm.faces.new([centre, inner[k][0], inner[j][0]]), [0.62, inner[k][1], inner[j][1]])
-    for a, b in zip(rings, rings[1:]):
-        for k in range(20):
-            j = (k + 1) % 20
-            tint(bm.faces.new([a[k][0], b[k][0], b[j][0], a[j][0]]), [a[k][1], b[k][1], b[j][1], a[j][1]])
-    for f in bm.faces:
-        if f.normal.z < 0:
-            f.normal_flip()
-    me = bpy.data.meshes.new("contact")
-    bm.to_mesh(me)
-    bm.free()
-    me.materials.append(mat)
-    link(bpy.data.objects.new("contact", me))
-
-
 ROUND = ("roof-disc", "roof-num", "bonnet-name", "door-num", "roundel", "lamp", "ring", "spot", "glass", "tail")
 
 
 def finish(name, length, width, height, body):
-    """Squash the body to toy proportions, then add round wheels and the shadow."""
+    """Squash the body to toy proportions, then add round wheels."""
     sx, sy, sz = LENGTH / length, WIDTH / width, HEIGHT / height
     for o in bpy.context.scene.objects:
         if o.type == "MESH":
@@ -440,12 +393,14 @@ def finish(name, length, width, height, body):
             fender(m, x * sx, side * track, width_w, skin)
     for o in bpy.context.scene.objects:
         if o.type == "MESH":
-            # White everywhere: the colours multiply the materials; only the shadow fades.
+            # White everywhere: the colours multiply the materials.
             attr = o.data.color_attributes.new("Col", "FLOAT_COLOR", "CORNER")
             for d in attr.data:
                 d.color = (1, 1, 1, 1)
             o.data.color_attributes.active_color = attr
-    shadow(m)
+    # No contact shadow in the model: one fixed to the body pokes through the
+    # ground or hangs in the air whenever the car pitches over a crest. The
+    # game lays a blob on the ground under each car instead.
     export(name, colors=True)
 
 
