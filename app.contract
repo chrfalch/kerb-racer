@@ -203,7 +203,7 @@ component KerbRacers
                 column width=10 height=10 border-radius=5 background-color=r.color border-width=1 border-color="#00000055"
                 text r.name width=40 font-weight=700 color=(r.you ? "#22252b" : "#fbf6e9")
                 text r.time font-size=12 color=(r.you ? "#22252b" : "#c9d6b8")
-          button press=togglePause testId="pause" aria-label=(paused ? "Resume" : "Pause") position="absolute" top="calc(env(safe-area-inset-top) + 16px)" left="50%" translate="-50% 0px" width=48 height=48 align-items="center" justify-content="center" border-radius=24 background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
+          button press=togglePause testId="pause" aria-label=(paused ? "Resume" : "Pause") position="absolute" top="calc(env(safe-area-inset-top) + 16px)" left="50%" translate="-50% 0px" width=48 height=48 display="flex" padding=0 align-items="center" justify-content="center" border-radius=24 background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
             svg width=20 height=20 viewBox="0 0 20 20"
               if paused
                 polygon points="5,2 18,10 5,18" fill="#fbf6e9"
