@@ -278,6 +278,7 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
         (true, RUNOFF_SURFACE) => GRIP_GRAVEL,
         (true, _) => GRIP_DIRT_GRASS,
     };
+    let grip = if track.wet { grip * crate::track::WET } else { grip };
     let grip = grip * body.car.load.clamp(0.3, 1.5) * (1.0 - 0.55 * body.car.shaken);
     let (drift, brake, max_slip) = if track.dirt {
         (DRIFT_DIRT, BRAKE_DIRT, MAX_SLIP_DIRT)

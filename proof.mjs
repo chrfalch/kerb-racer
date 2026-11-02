@@ -25,7 +25,7 @@ if (import.meta.main) await proof(import.meta, async ({open, check, out, host, p
   const title = await s.tree();
   const ax = await axNames(s);
   check('Race is focused and named', node(title, 'play')?.focused === true && (ax.unavailable || ax.name('play') === 'Race'));
-  check('four tracks offered', ['track-0', 'track-1', 'track-2', 'track-3'].every(id => !!node(title, id)));
+  check('five tracks offered', ['track-0', 'track-1', 'track-2', 'track-3', 'track-4'].every(id => !!node(title, id)));
   check('controls explained', title.nodes.some(n => n.props?.text === 'Right click: gas · Left click: brake'));
   check('world loads only after Race', !node(title, 'world'));
   if (host === 'web') await s.screenshot(resolve(out, 'menu.png'));
