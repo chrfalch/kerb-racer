@@ -227,15 +227,6 @@ component KerbRacers
                 column width=10 height=10 border-radius=5 background-color=r.color border-width=1 border-color="#00000055"
                 text r.name width=40 font-weight=700 color=(r.you ? "#22252b" : "#fbf6e9")
                 text r.time font-size=12 color=(r.you ? "#22252b" : "#c9d6b8")
-          button press=togglePause testId="pause" aria-label=(paused ? "Resume" : "Pause") position="absolute" top="calc(env(safe-area-inset-top) + 16px)" left="50%" translate="-50% 0px" width=48 height=48 display="flex" padding=0 align-items="center" justify-content="center" border-radius=24 background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
-            svg width=20 height=20 viewBox="0 0 20 20"
-              if paused
-                polygon points="5,2 18,10 5,18" fill="#fbf6e9"
-              else
-                rect x=3 y=2 width=5 height=16 rx=1 fill="#fbf6e9"
-                rect x=12 y=2 width=5 height=16 rx=1 fill="#fbf6e9"
-          button press=toggleSound testId="sound" aria-label=(muted ? "Sound off" : "Sound on") aria-pressed=(not muted) position="absolute" top="calc(env(safe-area-inset-top) + 72px)" left="50%" translate="-50% 0px" width=40 height=40 align-items="center" justify-content="center" border-radius=20 background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
-            Speaker(on=(not muted))
           column position="absolute" left=0 right=0 bottom="calc(env(safe-area-inset-bottom) + 6px)" align-items="center" gap=8 pointer-events="none"
             if hud.air
               text "AIR" testId="air" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#3fa7d6e6"
@@ -298,6 +289,16 @@ component KerbRacers
                     polygon points=(b.you ? "4.6,0 -3.2,3 -1.6,0 -3.2,-3" : "3.8,0 -2.6,2.5 -1.3,0 -2.6,-2.5") fill=b.fill stroke=(b.you ? "#22252b" : b.ring) stroke-width=(b.you ? 1.1 : 0.8) stroke-linejoin="round"
             if hud.radar.behind != ""
               text `▼ ${hud.radar.behind}` testId="radar-behind" padding-top=3 padding-bottom=3 padding-left=8 padding-right=8 border-radius=8 font-size=12 font-weight=700 font-variant-numeric="tabular-nums" color="#c9d6b8" background-color="#14201bcc"
+            row gap=10 align-items="center" pointer-events="auto"
+              button press=togglePause testId="pause" aria-label=(paused ? "Resume" : "Pause") width=48 height=48 display="flex" padding=0 align-items="center" justify-content="center" border-radius=24 background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
+                svg width=20 height=20 viewBox="0 0 20 20"
+                  if paused
+                    polygon points="5,2 18,10 5,18" fill="#fbf6e9"
+                  else
+                    rect x=3 y=2 width=5 height=16 rx=1 fill="#fbf6e9"
+                    rect x=12 y=2 width=5 height=16 rx=1 fill="#fbf6e9"
+              button press=toggleSound testId="sound" aria-label=(muted ? "Sound off" : "Sound on") aria-pressed=(not muted) width=48 height=48 display="flex" padding=0 align-items="center" justify-content="center" border-radius=24 background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
+                Speaker(on=(not muted))
           if hud.phase == ""
             column testId="loading" role="status" aria-label=`Loading ${trackName(track)}` position="absolute" inset=0 overflow="hidden" background-color="#2a5224"
               RaceScene()
@@ -356,17 +357,18 @@ component KerbRacers
           if paused
             column testId="paused" position="absolute" inset=0 align-items="center" justify-content="center" gap=14 background-color="#0f1a12cc"
               text "Paused" font-size=40 font-weight=900
-              button press=togglePause testId="resume" aria-label="Resume race" padding=14 border-radius=12 background-color="#f2c230"
-                text "Resume" font-weight=800 color="#22252b"
-              button press=restart testId="restart" aria-label="Restart" padding=12 border-radius=12 background-color="#33402f"
-                text "Restart"
-              button press=menu testId="quit" aria-label="Quit to menu" padding=12 border-radius=12 background-color="#33402f"
-                text "Menu"
+              row gap=12 align-items="center" flex-wrap="wrap" justify-content="center"
+                button press=togglePause testId="resume" aria-label="Resume race" padding=14 border-radius=12 background-color="#f2c230"
+                  text "Resume" font-weight=800 color="#22252b"
+                button press=restart testId="restart" aria-label="Restart" padding=12 border-radius=12 background-color="#33402f"
+                  text "Restart"
+                button press=menu testId="quit" aria-label="Quit to menu" padding=12 border-radius=12 background-color="#33402f"
+                  text "Menu"
       else
         column testId="menu-screen" width="100%" height="100%" position="relative" overflow="hidden" background-color="#2a5224"
           audio src="assets/music/menu.m4a" testId="menu-music" loop=true preload="auto" volume=0.6 paused=(muted or not awake)
           RaceScene()
-          button press=toggleSound testId="sound" aria-label=(awake and not muted ? "Sound on" : "Sound off") aria-pressed=(awake and not muted) position="absolute" z-index=1 top="calc(env(safe-area-inset-top) + 14px)" right="calc(env(safe-area-inset-right) + 14px)" width=48 height=48 align-items="center" justify-content="center" border-radius=24 background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
+          button press=toggleSound testId="sound" aria-label=(awake and not muted ? "Sound on" : "Sound off") aria-pressed=(awake and not muted) position="absolute" z-index=1 top="calc(env(safe-area-inset-top) + 14px)" right="calc(env(safe-area-inset-right) + 14px)" width=48 height=48 display="flex" padding=0 align-items="center" justify-content="center" border-radius=24 background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
             Speaker(on=(awake and not muted))
           column position="absolute" inset=0 box-sizing="border-box" overflow="auto" padding-top="calc(env(safe-area-inset-top) + 16px)" padding-right="calc(max(env(safe-area-inset-left), env(safe-area-inset-right)) + 16px)" padding-bottom="calc(env(safe-area-inset-bottom) + 16px)" padding-left="calc(max(env(safe-area-inset-left), env(safe-area-inset-right)) + 16px)"
             column margin-top="auto" margin-bottom="auto" align-items="center" gap=14
