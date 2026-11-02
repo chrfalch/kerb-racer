@@ -339,9 +339,9 @@ impl Game for KerbRacers {
         }
         // Real-time sun shadows are the costliest thing on screen (Safari's
         // WebGPU above all), so below high quality the woods' shadows are baked
-        // into an overlay and each car carries a soft blob instead.
-        // Under the rain clouds there is no sun: no shade to bake, only a
-        // soft contact shadow right under each car.
+        // into an overlay and each car's blob is its sun shadow too. With
+        // real-time shadows, or under the rain clouds where there is no sun,
+        // the blob is only a soft contact shadow right under the car.
         let baked = args.quality < 2 || t.wet;
         if baked && !t.wet {
             let shade = w
@@ -409,7 +409,6 @@ impl Game for KerbRacers {
                 (
                     Transform::at(p.x, y + 0.1, p.y),
                     blob.clone(),
-                    Visible(baked),
                     Ambient,
                 ),
             );
@@ -592,6 +591,8 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
     for body in list.iter_mut() {
         car::locate(&t, body);
     }
+    // High quality's sun casts the cars' own shadows.
+    let live_sun = w.get::<DirectionalLight>("sun").is_some_and(|sun| sun.shadows);
     for (e, body) in entities.iter().zip(list) {
         let car = &body.car;
         let mut pose = w.require_mut::<Transform>(*e);
@@ -606,19 +607,13 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
         // the low sun, shrinks and fades, which is how a jump reads from above.
         let idx = car.idx as usize;
         let up = (car.y - t.surface(body.p, idx)).max(0.0);
-        // Under cloud it stays right below the car.
-        let at = if t.wet {
+        // Under cloud, or beside a real-time sun shadow, it stays right below the car.
+        let at = if t.wet || live_sun {
             body.p
         } else {
             body.p + SHADOW_OFFSET + SUN_AWAY * (up * SHADOW_REACH)
         };
-        let slope = t.gradient(at, idx);
-        let tilt = Quat::from_rotation_arc(Vec3::Y, Vec3::new(-slope.x, 1.0, -slope.y).normalize());
-        *w.require_mut::<Transform>(format!("{name}-shadow").as_str()) = Transform {
-            position: Vec3::new(at.x, t.height(at, idx) + 0.1, at.y),
-            rotation: tilt * Quat::from_rotation_y(-car.heading),
-            scale: Vec3::splat(1.0 / (1.0 + 0.35 * up)),
-        };
+        *w.require_mut::<Transform>(format!("{name}-shadow").as_str()) = blob_pose(&t, at, idx, car.heading, up);
         // On dirt every car trails dust; there is no rubber to smoke.
         let smoke = !t.dirt && !t.wet && car.sliding && car.surface != car::GRASS && speed > 5.0;
         // On a wet road every car throws up spray behind it.
@@ -715,6 +710,28 @@ fn puffs(w: &mut World, car: Entity, name: &str, dirt: bool, wet: bool) {
                 Ambient,
             ),
         );
+    }
+}
+
+/// A car's blob laid on the ground at `at`: tilted to the plane through the
+/// ground at its nose, tail and sides rather than the slope at one point, and
+/// lifted clear of every sample, so on a crest, in a dip or across a bank's
+/// edge it neither stands up on its side nor sinks into the ground.
+fn blob_pose(t: &Track, at: Vec2, idx: usize, heading: f32, up: f32) -> Transform {
+    // Inside the blob's 4.6 m by 2.5 m, where its shade is darkest.
+    let (reach, half) = (1.6, 0.9);
+    let fwd = Vec2::new(math::cos(heading), math::sin(heading));
+    let side = Vec2::new(-fwd.y, fwd.x);
+    let h = |d: Vec2| t.height(at + d, idx);
+    let (nose, tail) = (h(fwd * reach), h(-fwd * reach));
+    let (left, right) = (h(side * half), h(-side * half));
+    let slope = fwd * ((nose - tail) / (2.0 * reach)) + side * ((left - right) / (2.0 * half));
+    let tilt = Quat::from_rotation_arc(Vec3::Y, Vec3::new(-slope.x, 1.0, -slope.y).normalize());
+    let y = h(Vec2::ZERO).max((nose + tail) * 0.5).max((left + right) * 0.5);
+    Transform {
+        position: Vec3::new(at.x, y + 0.1, at.y),
+        rotation: tilt * Quat::from_rotation_y(-heading),
+        scale: Vec3::splat(1.0 / (1.0 + 0.35 * up)),
     }
 }
 

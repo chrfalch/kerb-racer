@@ -58,12 +58,18 @@ The authoring diary: `bun exact.mjs feedback status` says whether this project k
 
 Real-time sun shadows run at ~12 fps in Safari's WebGPU, so Medium and Low draw
 baked ones: `art/textures/shade-{0,1,2,3}.png` is an alpha overlay painted from
-the exact seeded positions of every pine, broadleaf, bush and fence section
-(`art/src/casters-{id}.json`), and each car carries a blob (`blob.png`).
+the exact seeded positions and base heights of every pine, broadleaf, bush and
+fence section, plus the land's corner heights (`art/src/casters-{id}.json`);
+`shade.py` follows each sun ray down to the land, so shadows fall correctly
+across hills and hollows. Each car carries a blob (`blob.png`) that
+`blob_pose` fits to the ground under its footprint: offset away from the sun on
+Medium and Low, right under the car on High and in the wet.
 Real-time shadows are High only (`shadows: quality >= 2` in `light()`); keep it so.
+The car models have no contact shadow of their own: one fixed to the body pokes
+through the ground or floats whenever a car pitches over a crest.
 
 The logic test `baked_shade_matches_the_woods` fails whenever setup places the
-woods differently: a new tree model, a changed density, a different RNG draw
+woods differently or the land's heights change (a new `Lift`, say): a new tree model, a changed density, a different RNG draw
 order in `scenery::props` or anything that runs before it in `setup`. Then:
 
 ```sh
