@@ -665,10 +665,16 @@ pub fn road(t: &Track) -> Model {
         let d = (lat - t.line[i]) / 1.6;
         let rubber = 0.22 * math::exp(-d * d);
         let edge = 0.08 * ((lat.abs() - (HALF - 1.0)) / 1.0).clamp(0.0, 1.0);
-        shade(
-            [1.0; 4],
-            (0.98 + 0.05 * noise(i as i32 / 6, 1, 5)) * (1.0 - rubber) + edge,
-        )
+        let k = (0.98 + 0.05 * noise(i as i32 / 6, 1, 5)) * (1.0 - rubber) + edge;
+        // Rain darkens the tarmac; it pools where the surface dips and in the
+        // ruts the tyres have worn, a blacker sheen in broad patches.
+        let k = if t.wet {
+            let puddle = noise(i as i32 / 9, (lat * 0.6) as i32, 31);
+            k * (0.5 - 0.12 * puddle)
+        } else {
+            k
+        };
+        shade([1.0; 4], k)
     });
     let mut verge = Builder::new();
     for side in [-1.0f32, 1.0] {
@@ -697,6 +703,8 @@ pub fn road(t: &Track) -> Model {
     // Kerbs on both sides of every real corner: raised red and white blocks about
     // a metre long, ramped on both edges so they catch the light like the real thing.
     let red = hex(0xd83a2e);
+    // In the rain at dusk the paint is grimy and dim.
+    let (red, white) = if t.wet { (shade(red, 0.55), shade(white, 0.5)) } else { (red, white) };
     let kerb = |i: usize| (0..9).any(|k| t.bend[(i + n + k - 4) % n].abs() > 1.0 / 24.0);
     // Across the kerb: (lateral offset from the asphalt edge inward, height).
     let profile = [(-0.15, 0.045), (0.05, 0.13), (0.45, 0.13), (0.6, 0.03)];
@@ -740,6 +748,9 @@ pub fn road(t: &Track) -> Model {
         }
     }
     start_line(&mut paint, t);
+    // Wet, the surfaces turn glossy: the tarmac most of all, so the
+    // headlights' pools shine on it.
+    let (r_clay, r_tarmac, r_paint) = if t.wet { (0.55, 0.16, 0.3) } else { (0.95, 0.85, 0.7) };
     let mut clay = clay.finish();
     drape(&mut clay, t);
     clay.material = 0;
@@ -757,11 +768,11 @@ pub fn road(t: &Track) -> Model {
     model(
         vec![clay, tarmac, paint, verge, marks],
         vec![
-            textured_material(0, 0.95),
-            textured_material(1, 0.85),
+            textured_material(0, r_clay),
+            textured_material(1, r_tarmac),
             MaterialData {
                 metallic: 0.0,
-                roughness: 0.7,
+                roughness: r_paint,
                 ..MaterialData::default()
             },
             textured_material(2, 0.95),
@@ -842,6 +853,10 @@ pub fn ground(t: &Track) -> Model {
             let k = (1.08 - 0.4 * woods) * (0.94 + 0.12 * patch);
             // Round a dirt track the grass is parched: yellower, browner, in drier patches.
             let dry = if t.dirt { 1.0 - 0.6 * woods } else { 0.0 };
+            // Moorland in the rain: a dark, muted olive, damp all over.
+            if t.wet {
+                return [k * 0.62, k * 0.66, k * 0.56, 1.0];
+            }
             [
                 k * (1.0 - 0.1 * woods) * (1.0 + 0.32 * dry),
                 k * (1.0 + 0.04 * dry),
@@ -861,8 +876,12 @@ pub fn ground(t: &Track) -> Model {
                 q.map(|(a, c)| land_corner(t, a, c, 0.0)),
                 uv,
                 q.map(|(a, c)| {
-                    let shade = hillshade(land_normal(t, a, c));
+                    let n = land_normal(t, a, c);
                     let tint = at(a, c);
+                    if t.wet {
+                        return moor_tint(t, tint, n, a, c);
+                    }
+                    let shade = hillshade(n);
                     [tint[0] * shade, tint[1] * shade, tint[2] * shade, tint[3]]
                 }),
                 q.map(|(a, c)| land_normal(t, a, c)),
@@ -875,6 +894,24 @@ pub fn ground(t: &Track) -> Model {
         vec![textured_material(0, 0.95)],
         &[texture],
     )
+}
+
+/// The moor's grass from above: its relief shaded hard, since under cloud
+/// there is no sun to show it, and pale mist lying in the hollows, thinning
+/// up the slopes to the dark crests, as in a valley at dusk.
+fn moor_tint(t: &Track, tint: [f32; 4], n: Vec3, i: usize, j: usize) -> [f32; 4] {
+    let shade = (1.0 + 2.6 * (n.dot(SUN) - SUN.y)).clamp(0.35, 1.6);
+    let level = t.y.iter().sum::<f32>() / t.len().max(1) as f32;
+    let low = level - t.land_node(i as i64, j as i64);
+    let mist = smooth(-1.0, 6.0, low) * 0.85;
+    let crest = smooth(1.0, 7.0, -low) * 0.35;
+    let k = shade * (1.0 - crest);
+    let haze = [1.55, 1.95, 2.0];
+    let mut out = [0.0, 0.0, 0.0, tint[3]];
+    for c in 0..3 {
+        out[c] = tint[c] * k * (1.0 - mist) + haze[c] * tint[c].max(0.5) * mist;
+    }
+    out
 }
 
 /// A corner of the land grid, `lift` above it.
@@ -990,6 +1027,10 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
     }
     if t.dirt {
         rocky(w, t, quality, &mut out);
+        return out;
+    }
+    if t.wet {
+        moor(w, t, quality, &mut out);
         return out;
     }
     // Dressing along the verge: ferns, poppies and stones, logs by the corners.
@@ -1116,6 +1157,46 @@ pub fn props(w: &World, t: &Track, quality: u32) -> Vec<Prop> {
         ));
     }
     out
+}
+
+/// The open moor round a wet track: bare rolling hills, no trees, only
+/// bracken and the odd grey stone in the grass, so the land's shape and the
+/// mist lying in its hollows are the scenery.
+fn moor(w: &World, t: &Track, quality: u32, out: &mut Vec<Prop>) {
+    let (cx, cz) = centre_of(t);
+    let mut placed: Vec<(Vec2, f32)> = Vec::new();
+    let free = |placed: &[(Vec2, f32)], p: Vec2, r: f32| {
+        placed.iter().all(|(q, s)| (*q - p).length() >= r + s)
+    };
+    let tufts = if quality == 0 { 120 } else { 700 };
+    for _ in 0..tufts {
+        let p = Vec2::new(w.rand(cx - 90.0..cx + 90.0), w.rand(cz - 78.0..cz + 78.0));
+        let clear = clearance(t, p);
+        if !(HALF + RUNOFF + 1.8..34.0).contains(&clear) {
+            continue;
+        }
+        // Mostly bracken; a stone in one of every six, kept off the strip by the fence.
+        let stone = w.chance(0.16);
+        if stone && clear < WALL + 0.5 {
+            continue;
+        }
+        let radius = if stone { 0.9 } else { 0.8 };
+        if !free(&placed, p, radius) {
+            continue;
+        }
+        placed.push((p, radius));
+        let (model, scale) = if stone {
+            ("rock.model", w.rand(0.5..1.3))
+        } else {
+            ("fern.model", w.rand(0.7..1.15))
+        };
+        out.push(Prop::new(
+            model,
+            p,
+            w.rand(0.0..std::f32::consts::TAU),
+            Vec3::splat(scale),
+        ));
+    }
 }
 
 /// A dirt track's surroundings: rocky scrubland with boulders, a few hardy

@@ -20,7 +20,7 @@ import { join, resolve, extname } from 'node:path';
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : fallback; };
-const valued = new Set(['seconds', 'dpr', 'size', 'dist', 'json', 'warm', 'shot']);
+const valued = new Set(['seconds', 'dpr', 'size', 'dist', 'json', 'warm', 'shot', 'shots']);
 const scenarios = args.filter((a, i) => !a.startsWith('--') && !valued.has(args[i - 1]?.slice(2)));
 if (!scenarios.length) scenarios.push('q1');
 const seconds = Number(flag('seconds', 8));
@@ -105,6 +105,8 @@ async function run(spec) {
     };
     await click(`track-${track}`);
     await click('play');
+    // The race waits behind a "click to start" overlay once the track is ready.
+    await click('start');
     let s;
     while (Date.now() < deadline + 60000) {
       s = await client.evaluate(`${STATE}(false)`).catch(() => null);
@@ -128,7 +130,12 @@ async function run(spec) {
     const cpu = profiling ? (await client.call('Profiler.stop')).profile : null;
     s = await client.evaluate(`${STATE}(false)`);
     const shot = flag('shot', null);
-    if (shot) await Bun.write(`${shot}-${spec}.png`, Buffer.from((await client.call('Page.captureScreenshot')).data, 'base64'));
+    // --shots n: a screenshot every second for n seconds more, as the race goes on.
+    const shots = Number(flag('shots', 1));
+    for (let k = 0; shot && k < shots; k++) {
+      if (k) await sleep(1000);
+      await Bun.write(`${shot}-${spec}${shots > 1 ? `-${k}` : ''}.png`, Buffer.from((await client.call('Page.captureScreenshot')).data, 'base64'));
+    }
     const hud = await client.evaluate(`document.querySelector('[data-testid="hud-speed"]')?.textContent ?? null`);
     await key('keyUp');
     const adapter = await client.evaluate(`navigator.gpu?.requestAdapter().then(a => a ? [a.info?.vendor, a.info?.architecture, a.info?.description].filter(Boolean).join(' ') : 'none')`);

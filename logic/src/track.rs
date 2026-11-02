@@ -17,6 +17,8 @@ pub const PLAN_BRAKE: f32 = 17.0;
 pub const VMAX: f32 = 31.0;
 /// On dirt the planner expects this share of its asphalt grip and braking.
 pub const PLAN_DIRT: f32 = 0.7;
+/// On a wet road the tyres have this share of their dry grip, and the planner knows it.
+pub const WET: f32 = 0.9;
 /// Gravity (m/s²): one and a half times the real thing, so jumps are short,
 /// snappy hops and hills pull hard.
 pub const G: f32 = 9.81 * 1.5;
@@ -53,6 +55,8 @@ pub struct Layout {
     pub name: &'static str,
     /// A loose dirt road with gravel run-off instead of asphalt and kerbs.
     pub dirt: bool,
+    /// Dusk in the rain: mist, wet asphalt and headlights.
+    pub wet: bool,
     /// Metres from the first point to the start line, so the grid sits on a straight.
     pub start: f32,
     pub points: &'static [(f32, f32)],
@@ -61,10 +65,11 @@ pub struct Layout {
     pub hills: f32,
 }
 
-pub const LAYOUTS: [Layout; 4] = [
+pub const LAYOUTS: [Layout; 5] = [
     Layout {
         name: "Pine Hollow",
         dirt: false,
+        wet: false,
         start: 42.,
         points: &[
             (-34., 22.),
@@ -101,6 +106,7 @@ pub const LAYOUTS: [Layout; 4] = [
     Layout {
         name: "Fern Loop",
         dirt: false,
+        wet: false,
         start: 44.,
         points: &[
             (-38., 14.),
@@ -133,6 +139,7 @@ pub const LAYOUTS: [Layout; 4] = [
     Layout {
         name: "Kerb Ring",
         dirt: false,
+        wet: false,
         start: 40.,
         points: &[
             (-30., 18.),
@@ -164,6 +171,7 @@ pub const LAYOUTS: [Layout; 4] = [
     Layout {
         name: "Gravel Pit",
         dirt: true,
+        wet: false,
         start: 24.,
         points: &[
             (-31., 24.),
@@ -198,6 +206,40 @@ pub const LAYOUTS: [Layout; 4] = [
         ],
         hills: 3.5,
     },
+    Layout {
+        name: "Misty Moor",
+        dirt: false,
+        wet: true,
+        start: 30.,
+        points: &[
+            (-40., 20.),
+            (0., 28.),
+            (36., 18.),
+            (44., -14.),
+            (26., -34.),
+            (30., -52.),
+            (18., -66.),
+            (0., -70.),
+            (-26., -56.),
+            (-34., -30.),
+            (-48., -6.),
+        ],
+        // A road over open moorland, all long sweepers and big ground: a
+        // brow off the line, the long drag up to the top of the moor, over
+        // the crest and down the long wet descent into a compression, then
+        // up again over two rolling crests to the line.
+        lifts: &[
+            Lift::Crest { at: 8., up: 12., down: 14., h: 1.0 },
+            Lift::Slope { at: 40., len: 64., rise: 6.0 },
+            Lift::Crest { at: 108., up: 12., down: 14., h: 1.1 },
+            Lift::Slope { at: 128., len: 76., rise: -9.0 },
+            Lift::Crest { at: 206., up: 12., down: 12., h: -1.0 },
+            Lift::Slope { at: 232., len: 46., rise: 3.0 },
+            Lift::Crest { at: 282., up: 10., down: 13., h: 0.9 },
+        ],
+        // Big bare hills: the land rises and falls well above and below the road.
+        hills: 22.0,
+    },
 ];
 
 pub fn layout(track: u32) -> &'static Layout {
@@ -211,6 +253,8 @@ pub struct Track {
     pub id: u32,
     /// Loose dirt and gravel rather than asphalt (see `Layout::dirt`).
     pub dirt: bool,
+    /// Rain and mist at dusk (see `Layout::wet`).
+    pub wet: bool,
     pub x: Vec<f32>,
     pub z: Vec<f32>,
     /// Unit left normal at each sample.
@@ -540,7 +584,8 @@ fn land(t: &Track, rolling: f32) -> (f32, f32, Vec<f32>) {
     // How strongly the land pulls back to its own hills: about 15 m from the
     // road it is mostly its own, so the banks down from a raised road (or up
     // from a sunken one) stay gentle enough to drive over.
-    let pull = 0.02;
+    // Up on the moor the hills stand closer to the road: steeper banks.
+    let pull = if t.wet { 0.035 } else { 0.02 };
     for _ in 0..400 {
         for i in 0..=nx {
             for j in 0..=nz {
@@ -706,7 +751,13 @@ pub fn build(id: u32) -> Track {
     };
     let (reach_left, reach_right) = (reach(1.0), reach(-1.0));
 
-    let feel = if dirt { PLAN_DIRT } else { 1.0 };
+    let feel = if dirt {
+        PLAN_DIRT
+    } else if layout(id).wet {
+        WET
+    } else {
+        1.0
+    };
     // Over a crest the tyres go light and grip less; in a dip they bite harder.
     let mut speed: Vec<f32> = (0..n)
         .map(|i| {
@@ -771,6 +822,7 @@ pub fn build(id: u32) -> Track {
     let t = Track {
         id,
         dirt,
+        wet: layout(id).wet,
         x: centre.iter().map(|p| p.x).collect(),
         z: centre.iter().map(|p| p.y).collect(),
         nx: normals.iter().map(|p| p.x).collect(),

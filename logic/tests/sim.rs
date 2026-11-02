@@ -23,7 +23,7 @@ fn race(track: u32) -> Sim<KerbRacers> {
 
 #[test]
 fn tracks_are_short_and_separated() {
-    for id in 0..4 {
+    for id in 0..track::LAYOUTS.len() as u32 {
         let t = track::build(id);
         let n = t.len();
         assert!(t.length() > 240. && t.length() < 380., "{} m", t.length());
@@ -48,8 +48,8 @@ fn tracks_are_short_and_separated() {
                 );
             }
         }
-        // Dirt has less grip, so its hairpins are slower.
-        let floor = if t.dirt { 6.0 } else { 7.5 };
+        // Dirt and wet tarmac have less grip, so their hairpins are slower.
+        let floor = if t.dirt { 6.0 } else if t.wet { 7.0 } else { 7.5 };
         assert!(slowest > floor && fastest > 25.0);
         assert!(t.wall.iter().all(|w| *w > HALF + 1.5));
     }
@@ -57,7 +57,7 @@ fn tracks_are_short_and_separated() {
 
 #[test]
 fn rivals_finish_three_laps_on_every_track() {
-    for id in 0..4 {
+    for id in 0..track::LAYOUTS.len() as u32 {
         let mut game = race(id);
         // The player holds gas and brakes for the planned speed: a careful human.
         for _ in 0..(120 * 150) {
@@ -137,7 +137,7 @@ fn saves_restore_and_continue_identically() {
 
 #[test]
 fn scenery_budget() {
-    for id in 0..4 {
+    for id in 0..track::LAYOUTS.len() as u32 {
         let game = race(id);
         let w = game.world();
         let mut counts = std::collections::BTreeMap::new();
@@ -229,7 +229,11 @@ fn casters(game: &Sim<KerbRacers>) -> String {
 #[test]
 fn baked_shade_matches_the_woods() {
     // KR_REBAKE=1 rewrites the lists; then run `blender -b -P art/src/shade.py`.
-    for id in 0..4 {
+    for id in 0..track::LAYOUTS.len() as u32 {
+        // Under the rain clouds there is no sun to cast them.
+        if track::layout(id).wet {
+            continue;
+        }
         // Setup waits for the declared models, so deliver them as a host would.
         let game = race(id);
         let path = format!(
@@ -312,7 +316,7 @@ fn cars_drift_through_corners() {
 /// samples, corners or the land.
 #[test]
 fn the_ground_has_no_seams() {
-    for id in 0..4 {
+    for id in 0..track::LAYOUTS.len() as u32 {
         let t = track::build(id);
         let mut worst = (0f32, 0f32, 0f32);
         for k in -76..=76 {

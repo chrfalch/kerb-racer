@@ -12,7 +12,7 @@ use track::Track;
 #[derive(Args)]
 pub struct Options {
     pub seed: u64,
-    /// Which circuit: 0 Pine Hollow, 1 Fern Loop, 2 Kerb Ring, 3 Gravel Pit (dirt).
+    /// Which circuit: 0 Pine Hollow, 1 Fern Loop, 2 Kerb Ring, 3 Gravel Pit (dirt), 4 Misty Moor (wet, at dusk).
     pub track: u32,
     pub laps: u32,
     /// Graphics: 0 low (no undergrowth), 1 medium (baked shadows, the default), 2 high (real-time sun shadows, haze and bloom).
@@ -276,7 +276,7 @@ impl Game for KerbRacers {
     fn setup(w: &mut World, args: &Options) {
         w.reseed(args.seed);
         let t = track::build(args.track % track::LAYOUTS.len() as u32);
-        light(w, args.quality);
+        light(w, args.quality, t.wet);
         let id = t.id;
         let ground = w
             .generated_model(&format!("ground-{id}.model"), scenery::ground(&t))
@@ -286,8 +286,8 @@ impl Game for KerbRacers {
             .generated_model(&format!("road-{id}.model"), scenery::road(&t))
             .expect("road");
         w.spawn_named("road", (Transform::default(), road));
-        // No flowers on the dirt track's scree.
-        if !t.dirt {
+        // No flowers on the dirt track's scree, nor up on the wet moor.
+        if !t.dirt && !t.wet {
             let flowers = scenery::flowers(w, &t);
             let flowers = w
                 .generated(&format!("flowers-{id}.model"), flowers)
@@ -317,8 +317,10 @@ impl Game for KerbRacers {
         // Real-time sun shadows are the costliest thing on screen (Safari's
         // WebGPU above all), so below high quality the woods' shadows are baked
         // into an overlay and each car carries a soft blob instead.
-        let baked = args.quality < 2;
-        if baked {
+        // Under the rain clouds there is no sun: no shade to bake, only a
+        // soft contact shadow right under each car.
+        let baked = args.quality < 2 || t.wet;
+        if baked && !t.wet {
             let shade = w
                 .generated_model(&format!("shade-{id}.model"), scenery::shade_overlay(&t))
                 .expect("shade");
@@ -360,7 +362,10 @@ impl Game for KerbRacers {
                     },
                 ),
             );
-            puffs(w, e, &name_of(k), t.dirt);
+            puffs(w, e, &name_of(k), t.dirt, t.wet);
+            if t.wet {
+                headlights(w, e);
+            }
             let (front, rear, track, rims) = wheel_layout(k);
             for (x, is_front) in [(front, true), (rear, false)] {
                 // Blender's left (+Y) is the game's -Z.
@@ -377,7 +382,7 @@ impl Game for KerbRacers {
             w.spawn_named(
                 format!("{}-shadow", name_of(k)),
                 (
-                    Transform::at(p.x + SHADOW_OFFSET.x, y + 0.1, p.y + SHADOW_OFFSET.y),
+                    Transform::at(p.x, y + 0.1, p.y),
                     blob.clone(),
                     Visible(baked),
                     Ambient,
@@ -413,6 +418,9 @@ impl Game for KerbRacers {
             focus_y,
             shake: 0.0,
         });
+        if t.wet {
+            rain(w);
+        }
         w.insert_resource(t);
         w.spawn_named(
             "camera",
@@ -571,7 +579,12 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
         // the low sun, shrinks and fades, which is how a jump reads from above.
         let idx = car.idx as usize;
         let up = (car.y - t.surface(body.p, idx)).max(0.0);
-        let at = body.p + SHADOW_OFFSET + SUN_AWAY * (up * SHADOW_REACH);
+        // Under cloud it stays right below the car.
+        let at = if t.wet {
+            body.p
+        } else {
+            body.p + SHADOW_OFFSET + SUN_AWAY * (up * SHADOW_REACH)
+        };
         let slope = t.gradient(at, idx);
         let tilt = Quat::from_rotation_arc(Vec3::Y, Vec3::new(-slope.x, 1.0, -slope.y).normalize());
         *w.require_mut::<Transform>(format!("{name}-shadow").as_str()) = Transform {
@@ -580,8 +593,9 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
             scale: Vec3::splat(1.0 / (1.0 + 0.35 * up)),
         };
         // On dirt every car trails dust; there is no rubber to smoke.
-        let smoke = !t.dirt && car.sliding && car.surface != car::GRASS && speed > 5.0;
-        let dust = (t.dirt || car.surface != car::ASPHALT) && speed > 3.0 && !car.air;
+        let smoke = !t.dirt && !t.wet && car.sliding && car.surface != car::GRASS && speed > 5.0;
+        // On a wet road every car throws up spray behind it.
+        let dust = (t.dirt || car.surface != car::ASPHALT || (t.wet && speed > 9.0)) && speed > 3.0 && !car.air;
         // A hard landing throws up a cloud, wherever it comes down.
         if car.landing > 1.0 {
             let puff = (6.0 + car.landing * 3.0).min(26.0) as u32;
@@ -630,8 +644,11 @@ fn turn_wheels(w: &mut World, cars: &[Entity], bodies: &[Body]) {
 /// Two trails behind each car: white tyre smoke for a slide on the road,
 /// brown dust off it. Both stay where they were born and start switched off.
 /// On a dirt track the dust is a pale ochre plume, thicker and longer-lived.
-fn puffs(w: &mut World, car: Entity, name: &str, dirt: bool) {
-    let dust = if dirt {
+fn puffs(w: &mut World, car: Entity, name: &str, dirt: bool, wet: bool) {
+    let dust = if wet {
+        // Spray off the wet road: pale, cool, lingering in the damp air.
+        ([0.45, 0.52, 0.54, 0.16], [0.4, 0.47, 0.5, 0.0], [0.8, 3.6])
+    } else if dirt {
         ([0.78, 0.64, 0.45, 0.5], [0.82, 0.72, 0.56, 0.0], [0.8, 3.2])
     } else {
         ([0.62, 0.45, 0.28, 0.42], [0.66, 0.55, 0.4, 0.0], [0.6, 2.2])
@@ -676,7 +693,11 @@ fn puffs(w: &mut World, car: Entity, name: &str, dirt: bool) {
 
 /// A low, late-afternoon sun from the west: long shadows across the road,
 /// warm light on everything facing it, cool sky in the shade, a golden haze.
-fn light(w: &mut World, quality: u32) {
+fn light(w: &mut World, quality: u32, wet: bool) {
+    if wet {
+        dusk(w, quality);
+        return;
+    }
     w.insert_resource(Environment {
         background: Some([0.42, 0.36, 0.22].into()),
         zenith: [0.22, 0.34, 0.55],
@@ -731,6 +752,126 @@ fn light(w: &mut World, quality: u32) {
     );
 }
 
+/// Misty Moor: a raincloud at dusk. A low teal sky, thick mist pooled in the
+/// hollows, no sun; the cars' headlights carry the scene, so the haze and
+/// bloom that are High's alone elsewhere are on at every quality here.
+fn dusk(w: &mut World, quality: u32) {
+    let mist = [0.15, 0.21, 0.22];
+    w.insert_resource(Environment {
+        background: Some(mist.into()),
+        zenith: [0.08, 0.12, 0.14],
+        horizon: [0.14, 0.19, 0.2],
+        ground: [0.02, 0.03, 0.03],
+        ambient: 0.35,
+        sun_disc: 0.0,
+        exposure: 0.85,
+        tone_mapping: ToneMapping::Aces,
+        fog: Some(Fog {
+            color: Some(mist.into()),
+            ..Fog::new(0.024, 0.12)
+        }),
+        bloom: Some(Bloom {
+            threshold: 0.9,
+            intensity: 0.45,
+            radius: 2.2,
+        }),
+    });
+    if quality >= 1 {
+        w.insert_resource(AmbientOcclusion {
+            radius: 1.2,
+            intensity: 0.7,
+            ..AmbientOcclusion::default()
+        });
+    }
+    // What little daylight gets through the cloud, from the last of the
+    // light low in the west: enough to model the hills.
+    w.spawn_named(
+        "sky",
+        (
+            Transform::at(-60.0, 40.0, -25.0).looking_at(Vec3::ZERO, Vec3::Y),
+            DirectionalLight {
+                color: [0.55, 0.7, 0.75],
+                illuminance: 1500.0,
+                shadows: false,
+            },
+        ),
+    );
+}
+
+/// A car's two headlights, cones thrown down the road ahead, and the red glow
+/// of its tail lights on the wet tarmac behind. The car's +X is forward; a
+/// spot shines along its own -Z.
+fn headlights(w: &mut World, car: Entity) {
+    let ahead = Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2) * Quat::from_rotation_x(-0.2);
+    for side in [-0.56f32, 0.56] {
+        w.spawn((
+            Transform {
+                position: Vec3::new(1.85, 0.7, side),
+                rotation: ahead,
+                scale: Vec3::ONE,
+            },
+            SpotLight {
+                color: [1.0, 0.86, 0.62],
+                intensity: 300000.0,
+                range: 32.0,
+                inner: 0.22,
+                outer: 0.5,
+            },
+            Parent(car),
+            Ambient,
+        ));
+    }
+    w.spawn((
+        Transform::at(-2.3, 0.6, 0.0),
+        PointLight {
+            color: [1.0, 0.12, 0.08],
+            intensity: 4000.0,
+            range: 7.0,
+        },
+        Parent(car),
+        Ambient,
+    ));
+}
+
+/// Rain: streaks falling through a box round the camera's focus, which the
+/// camera carries along (see `camera`).
+fn rain(w: &mut World) {
+    let rain = w.spawn_named(
+        "rain",
+        (
+            // Upside down, so the emitter's +Y falls.
+            Transform {
+                position: Vec3::ZERO,
+                rotation: Quat::from_rotation_x(std::f32::consts::PI),
+                scale: Vec3::ONE,
+            },
+            Emitter {
+                shape: emitter::Shape::Box(Vec3::new(30.0, 0.5, 26.0)),
+                rate: 700.0,
+                lifetime: 0.75,
+                speed: 22.0,
+                spread: 0.06,
+                gravity: Vec3::ZERO,
+                drag: 0.0,
+                size: [0.022, 0.022],
+                color: [[0.6, 0.7, 0.74, 0.16], [0.6, 0.7, 0.74, 0.08]],
+                seed: 99,
+                bound: [-32.0, -1.0, -28.0, 32.0, 18.0, 28.0],
+                additive: true,
+                running: true,
+                ..Emitter::default()
+            },
+            ParticleLook {
+                stretch: 0.04,
+                ..ParticleLook::default()
+            },
+            emitter::WorldSpace::default(),
+            Ambient,
+        ),
+    );
+    let _ = rain;
+}
+
 /// Ease the camera's focus toward a point ahead of the player.
 fn camera(w: &mut World, snap: bool) {
     let (p, v) = {
@@ -762,6 +903,9 @@ fn camera(w: &mut World, snap: bool) {
         math::sin(now * 71.0 + 1.3),
         math::sin(now * 61.0 + 2.1),
     ) * shake;
+    if let Some(rain) = w.named("rain") {
+        w.require_mut::<Transform>(rain).position = focus + Vec3::Y * 15.0;
+    }
     let mut cam = w.require_mut::<Transform>("camera");
     // A little lower and further back than straight down, so hills and jumps
     // show as depth as well as light.
