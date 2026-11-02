@@ -14,3 +14,15 @@ test "Pick a track, race, and pause"
   expect tree has "radar-ahead"
   tap "pause"
   expect tree has "restart"
+
+test "Sound wakes on a tap, mutes, and stays muted in the race"
+  expect state awake == false
+  tap "sound"
+  expect state awake == true
+  expect state muted == false
+  tap "sound"
+  expect state muted == true
+  tap "play"
+  tap "start"
+  tap "sound"
+  expect state muted == false

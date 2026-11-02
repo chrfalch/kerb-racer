@@ -11,9 +11,12 @@ import numpy as np
 SRC = os.path.dirname(os.path.abspath(__file__))
 TEXTURES = os.path.join(os.path.dirname(SRC), "textures")
 N = 1024
-# The game's sun sits at (-70, 24, -28) looking at the origin: a point h metres
-# up throws its shadow this far along the ground, per metre of height.
-SUN = np.array([70.0, 28.0]) / 24.0
+# The game's sun sits at (-70, 24, -28) looking at the origin: its rays run
+# along DIR over the ground and drop DROP metres per metre they travel.
+DIR = np.array([70.0, 28.0]) / math.hypot(70.0, 28.0)
+DROP = 24.0 / math.hypot(70.0, 28.0)
+# How far (m) a ray steps while it looks for the hillside it lands on.
+STEP = 0.1
 SHADOW = np.array([0.07, 0.09, 0.18])  # sRGB, a cool blue shade
 CONIFERS = {"pine-a": 8.5, "pine-b": 6.5, "pine-c": 10.5}
 
@@ -42,7 +45,35 @@ def bake(track):
     ground = items[0]
     x0, z0 = ground["x"] - ground["w"] / 2, ground["z"] - ground["h"] / 2
     sx, sz = N / ground["w"], N / ground["h"]
+    land = np.array(ground["land"])  # corner heights, [x][z]
+    cell = ground["w"] / (land.shape[0] - 1)
     cover = np.zeros((N, N))
+
+    def ground_at(x, z):
+        """The land under (x, z), bilinear between its grid corners."""
+        fx = np.clip((x - x0) / cell, 0, land.shape[0] - 1.001)
+        fz = np.clip((z - z0) / cell, 0, land.shape[1] - 1.001)
+        i, j = fx.astype(int), fz.astype(int)
+        u, v = fx - i, fz - j
+        return (land[i, j] * (1 - u) * (1 - v) + land[i + 1, j] * u * (1 - v)
+                + land[i, j + 1] * (1 - u) * v + land[i + 1, j + 1] * u * v)
+
+    def cast(x, z, y):
+        """Where the sun's rays through (x, y, z) for each height in `y` meet
+        the land: down a slope a shadow reaches further, up one it falls short."""
+        y = np.atleast_1d(np.asarray(y, dtype=float))
+        reach = max((y.max() - land.min()) / DROP + 2 * STEP, 2 * STEP)
+        s = np.arange(0.0, reach, STEP)
+        px, pz = x + DIR[0] * s, z + DIR[1] * s
+        gap = y[:, None] - DROP * s[None, :] - ground_at(px, pz)[None, :]
+        under = gap <= 0
+        k = np.where(under.any(axis=1), under.argmax(axis=1), len(s) - 1)
+        # Between the last step above the land and the first below it.
+        k0 = np.maximum(k - 1, 0)
+        g0, g1 = gap[np.arange(len(y)), k0], gap[np.arange(len(y)), k]
+        f = np.divide(g0, g0 - g1, out=np.zeros_like(g0), where=(k > 0) & (g0 != g1))
+        d = s[k0] + (s[k] - s[k0]) * np.clip(f, 0, 1)
+        return x + DIR[0] * d, z + DIR[1] * d
 
     def disc(x, z, r, strength=1.0):
         cx, cz, rx, rz = (x - x0) * sx, (z - z0) * sz, r * sx, r * sz
@@ -55,46 +86,49 @@ def bake(track):
         patch = cover[i0:i1, j0:j1]
         np.maximum(patch, np.clip((1.0 - d) * 3.0, 0, 1) * strength, out=patch)
 
-    def stroke(x, z, h0, h1, r, strength=1.0):
+    def discs(x, z, y, hs, rs, strength=1.0):
+        """Shade at each height in `hs` above (x, y, z), `rs` metres across."""
+        cx, cz = cast(x, z, y + np.asarray(hs, dtype=float))
+        for px, pz, r in zip(cx, cz, np.broadcast_to(rs, cx.shape)):
+            if r > 0:
+                disc(px, pz, r, strength)
+
+    def stroke(x, z, y, h0, h1, r, strength=1.0):
         """A vertical pole from h0 to h1 metres: its shadow, a smear along the sun."""
-        steps = max(2, int((h1 - h0) * SUN[0] * sx / 2))
-        for k in range(steps + 1):
-            h = h0 + (h1 - h0) * k / steps
-            disc(x + SUN[0] * h, z + SUN[1] * h, r, strength)
+        steps = max(2, int((h1 - h0) / DROP * sx / 2))
+        discs(x, z, y, np.linspace(h0, h1, steps + 1), r, strength)
 
     for it in items[1:]:
-        x, z, s, kind = it["x"], it["z"], it["scale"], it["kind"]
+        x, y, z, s, kind = it["x"], it["y"], it["z"], it["scale"], it["kind"]
         if kind in CONIFERS:
             height = CONIFERS[kind] * s
-            stroke(x, z, 0, height * 0.25, 0.18 * s)
-            for k in range(28):
-                t = k / 27
-                h = height * (0.2 + 0.78 * t)
-                r = ((1 - t) ** 0.95 * height * 0.34 + 0.45) * 0.85
-                disc(x + SUN[0] * h, z + SUN[1] * h, r, 0.9)
+            stroke(x, z, y, 0, height * 0.25, 0.18 * s)
+            t = np.linspace(0, 1, 28)
+            hs = height * (0.2 + 0.78 * t)
+            rs = ((1 - t) ** 0.95 * height * 0.34 + 0.45) * 0.85
+            discs(x, z, y, hs, rs, 0.9)
         elif kind == "tree-a":
             size = 4.2 * s
-            stroke(x, z, 0, size * 0.4, 0.2 * s)
+            stroke(x, z, y, 0, size * 0.4, 0.2 * s)
             centre, radius = size * 0.6, size * 0.55
-            for k in range(18):
-                h = centre - radius + 2 * radius * k / 17
-                r = math.sqrt(max(radius ** 2 - (h - centre) ** 2, 0))
-                disc(x + SUN[0] * h, z + SUN[1] * h, r * 0.9, 0.85)
+            hs = centre - radius + 2 * radius * np.linspace(0, 1, 18)
+            rs = np.sqrt(np.maximum(radius ** 2 - (hs - centre) ** 2, 0))
+            discs(x, z, y, hs, rs * 0.9, 0.85)
         elif kind == "rock":
             # A squashed ico sphere: ~0.9 m by 0.7 across, 0.6 tall, per unit scale.
             height = 0.6 * it["h"]
-            for k in range(6):
-                h = height * k / 6
-                disc(x + SUN[0] * h, z + SUN[1] * h, 0.75 * s * (1 - 0.5 * k / 6), 0.85)
+            k = np.arange(6)
+            discs(x, z, y, height * k / 6, 0.75 * s * (1 - 0.5 * k / 6), 0.85)
         elif kind == "bush":
-            disc(x + SUN[0] * 0.4, z + SUN[1] * 0.4, 0.8 * s, 0.7)
+            discs(x, z, y, [0.4], 0.8 * s, 0.7)
         elif kind == "fence":
             dx, dz = it["dx"] * 3, it["dz"] * 3
-            stroke(x, z, 0, 1.2, 0.1, 0.8)
-            for h in (0.25, 1.05):
-                for k in range(16):
-                    t = k / 15
-                    disc(x + dx * t + SUN[0] * h, z + dz * t + SUN[1] * h, 0.08, 0.7)
+            stroke(x, z, y, 0, 1.2, 0.1, 0.8)
+            # The rails follow the land along the section.
+            lift = y - ground_at(x, z)
+            for t in np.linspace(0, 1, 16):
+                rx, rz = x + dx * t, z + dz * t
+                discs(rx, rz, ground_at(rx, rz) + lift, [0.25, 1.05], 0.08, 0.7)
     # Light through the needles: break the solid shapes up a little.
     rng = np.random.default_rng(track)
     holes = blur((rng.random((N, N)) > 0.86).astype(float), 2)

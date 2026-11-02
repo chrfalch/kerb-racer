@@ -6,6 +6,7 @@
   "game": {
     "audio": true,
     "assets": true,
+    "audio": true,
     "render": {
       "crate": "kerb-racers-render",
       "hooks": "Lens",

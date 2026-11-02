@@ -86,6 +86,10 @@ pub struct Car {
     pub roll: f32,
     /// How far the wheels have turned (radians, wrapped).
     pub spin: f32,
+    /// The hardest knock this tick (m/s closing speed), off a car or the fence.
+    pub knock: f32,
+    /// Against the fence this tick.
+    pub walled: bool,
     /// Height of the car's base above the datum and its vertical speed.
     pub y: f32,
     pub vy: f32,
@@ -464,6 +468,8 @@ fn wheels(car: &mut Car, ground: f32, dt: f32) {
 }
 
 pub fn step(track: &Track, body: &mut Body, dt: f32) {
+    body.car.knock = 0.0;
+    body.car.walled = false;
     let speed = body.v().length();
     let air = body.car.air;
     let slope = track.gradient(body.p, body.car.idx as usize);
@@ -481,7 +487,11 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     let target = aim(track, &body.car, ahead) - body.p;
     // Aim along where the car is going, not where its nose points, so a
     // drift doesn't fool the steering into running wide.
-    let f = if speed > 1.0 { body.v() / speed } else { body.forward() };
+    let f = if speed > 1.0 {
+        body.v() / speed
+    } else {
+        body.forward()
+    };
     let along = target.dot(f);
     let across = f.perp_dot(target);
     let alpha = math::atan2(across, along.max(0.01));
@@ -736,9 +746,11 @@ fn fence(track: &Track, body: &mut Body) {
     let out = track.normal(i) * side.signum();
     shove(track, body, -out * (side.abs() - limit));
     body.car.side = limit.copysign(side);
+    body.car.walled = true;
     let v = body.v();
     let into = v.dot(out);
     if into > 0.0 {
+        body.car.knock = body.car.knock.max(into);
         body.set_v((v - out * into * 1.35) * 0.7);
     }
 }
@@ -778,6 +790,9 @@ pub fn collide(track: &Track, bodies: &mut [Body]) {
                     shove(track, &mut bodies[b], n * overlap * 0.5);
                     let closing = (bodies[b].v() - bodies[a].v()).dot(n);
                     if closing < 0.0 {
+                        for k in [a, b] {
+                            bodies[k].car.knock = bodies[k].car.knock.max(-closing);
+                        }
                         let j = -closing * 0.6;
                         let (va, vb) = (bodies[a].v() - n * j, bodies[b].v() + n * j);
                         bodies[a].set_v(va);

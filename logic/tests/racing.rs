@@ -1,5 +1,5 @@
 //! Racing between cars: passes, the side the player picks, slipstreams, the
-//! rivals' characters, and what the player sees and hears of it.
+//! rivals' characters, and what the player sees of it.
 use exact_game::{Sim, Vec2, Visible};
 use kerb_racers_logic::car::{self, Body, Car, GRASS, PASS_GAP, SIDE_GAP};
 use kerb_racers_logic::track::{self, Track};
@@ -189,18 +189,6 @@ fn locked_wheels_lay_skid_marks() {
     game.key_down("KeyS");
     game.run(600.0);
     assert!(marks(&game) >= 4, "two streaks behind a locked car: {}", marks(&game));
-}
-
-#[test]
-fn the_engine_and_the_lights_are_heard() {
-    let mut game = race_with(0, 1);
-    game.key_down("KeyW");
-    game.run(5000.0);
-    let journal: Vec<String> = game.world().journal().iter().map(|e| e.line.clone()).collect();
-    let has = |s: &str| journal.iter().any(|l| l.contains(s));
-    assert!(has("sfx beep"), "a beep for each count");
-    assert!(has("sfx go"), "and one for the lights going out");
-    assert!(has("loop engine-"), "the engine runs");
 }
 
 #[test]

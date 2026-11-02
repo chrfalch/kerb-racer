@@ -25,6 +25,9 @@ pub struct Options {
     pub assist: u32,
     #[live]
     pub paused: bool,
+    /// Master volume, 0 (muted) to 1.
+    #[live]
+    pub volume: f32,
     #[restart]
     pub restart: bool,
 }
@@ -37,6 +40,7 @@ impl Default for Options {
             quality: 1,
             assist: 1,
             paused: false,
+            volume: 1.0,
             restart: false,
         }
     }
@@ -248,50 +252,66 @@ fn wheel_layout(id: u32) -> (f32, f32, f32, &'static str) {
     }
 }
 
+/// The Blender models and ground textures, then the sounds (`sound::ASSETS`).
+const MODELS: [&str; 35] = [
+    "car-0.model",
+    "car-1.model",
+    "car-2.model",
+    "car-3.model",
+    "car-4.model",
+    "car-5.model",
+    "pine-a.model",
+    "pine-b.model",
+    "pine-c.model",
+    "tree-a.model",
+    "bush.model",
+    "fern.model",
+    "daisies.model",
+    "mushrooms.model",
+    "logs.model",
+    "stump.model",
+    "rock.model",
+    "wheel-disc-l.model",
+    "wheel-disc-r.model",
+    "wheel-fuchs-l.model",
+    "wheel-fuchs-r.model",
+    "fence.model",
+    "barrier.model",
+    "poppies.model",
+    "asphalt.tex",
+    "grass.tex",
+    "clay.tex",
+    "dirt.tex",
+    "gravel.tex",
+    "scree.tex",
+    "blob.tex",
+    "shade-0.tex",
+    "shade-1.tex",
+    "shade-2.tex",
+    "shade-3.tex",
+];
+const ASSETS: [&str; MODELS.len() + sound::ASSETS.len()] = {
+    let mut all = [""; MODELS.len() + sound::ASSETS.len()];
+    let mut i = 0;
+    while i < all.len() {
+        all[i] = if i < MODELS.len() {
+            MODELS[i]
+        } else {
+            sound::ASSETS[i - MODELS.len()]
+        };
+        i += 1;
+    }
+    all
+};
+
 pub struct KerbRacers;
 impl Game for KerbRacers {
     const ID: &'static str = "kerb-racers";
     const HZ: u32 = 120;
-    /// The Blender models and ground textures. Setup waits for them, so the race
-    /// (and its countdown) only begins once the whole track can be drawn; the
-    /// loading screen in app.contract covers the wait.
-    const ASSETS: &'static [&'static str] = &[
-        "car-0.model",
-        "car-1.model",
-        "car-2.model",
-        "car-3.model",
-        "car-4.model",
-        "car-5.model",
-        "pine-a.model",
-        "pine-b.model",
-        "pine-c.model",
-        "tree-a.model",
-        "bush.model",
-        "fern.model",
-        "daisies.model",
-        "mushrooms.model",
-        "logs.model",
-        "stump.model",
-        "rock.model",
-        "wheel-disc-l.model",
-        "wheel-disc-r.model",
-        "wheel-fuchs-l.model",
-        "wheel-fuchs-r.model",
-        "fence.model",
-        "barrier.model",
-        "poppies.model",
-        "asphalt.tex",
-        "grass.tex",
-        "clay.tex",
-        "dirt.tex",
-        "gravel.tex",
-        "scree.tex",
-        "blob.tex",
-        "shade-0.tex",
-        "shade-1.tex",
-        "shade-2.tex",
-        "shade-3.tex",
-    ];
+    /// The models, textures and sounds. Setup waits for them, so the race
+    /// (and its countdown) only begins once the whole track can be drawn and
+    /// heard; the loading screen in app.contract covers the wait.
+    const ASSETS: &'static [&'static str] = &ASSETS;
     type Args = Options;
     fn actions() -> Actions {
         Actions::new()
@@ -312,6 +332,9 @@ impl Game for KerbRacers {
         }
         if args.assist > 2 {
             return Err(format!("assist is 0, 1 or 2, not {}", args.assist));
+        }
+        if !(0.0..=1.0).contains(&args.volume) {
+            return Err(format!("volume is 0 to 1, not {}", args.volume));
         }
         if args.laps == 0 || args.laps > 20 {
             return Err(format!("laps must be 1 to 20, not {}", args.laps));
@@ -361,9 +384,9 @@ impl Game for KerbRacers {
         }
         // Real-time sun shadows are the costliest thing on screen (Safari's
         // WebGPU above all), so below high quality the woods' shadows are baked
-        // into an overlay and each car carries a soft blob instead.
-        // Under the rain clouds there is no sun: no shade to bake, only a
-        // soft contact shadow right under each car.
+        // into an overlay and each car's blob is its sun shadow too. With
+        // real-time shadows, or under the rain clouds where there is no sun,
+        // the blob is only a soft contact shadow right under the car.
         let baked = args.quality < 2 || t.wet;
         if baked && !t.wet {
             let shade = w
@@ -374,6 +397,7 @@ impl Game for KerbRacers {
         let blob = w
             .generated_model("blob.model", scenery::blob())
             .expect("blob");
+        let mut cars = Vec::new();
         for (k, d) in DRIVERS.iter().enumerate() {
             let k = k as u32;
             let row = k / 2;
@@ -411,6 +435,7 @@ impl Game for KerbRacers {
                     },
                 ),
             );
+            cars.push((k, e));
             puffs(w, e, &name_of(k), t.dirt, t.wet);
             fx::setup_car(w, e, &name_of(k), k);
             if t.wet {
@@ -434,7 +459,6 @@ impl Game for KerbRacers {
                 (
                     Transform::at(p.x, y + 0.1, p.y),
                     blob.clone(),
-                    Visible(baked),
                     Ambient,
                 ),
             );
@@ -456,6 +480,7 @@ impl Game for KerbRacers {
                 );
             }
         }
+        sound::setup(w, &cars, t.dirt);
         let start = t.at(t.wrap(-12), 0.0);
         let focus_y = t.surface(start, t.wrap(-12));
         w.insert_resource(Race {
@@ -485,7 +510,6 @@ impl Game for KerbRacers {
             ),
         );
         fx::setup(w, args.assist);
-        sound::setup(w);
         camera(w, true);
         hud(w);
     }
@@ -527,13 +551,12 @@ impl Game for KerbRacers {
             p.insert(e, Opacity(0.28));
         }
     }
-    fn tick(w: &mut World, input: &Input, _: &Options) {
+    fn tick(w: &mut World, input: &Input, args: &Options) {
         let now = w.tick();
         let (start, laps) = {
             let r = w.resource::<Race>();
             (r.start, r.laps)
         };
-        sound::lights(w, now, start);
         if now >= start {
             race(w, input, now, start, laps);
         } else {
@@ -542,9 +565,7 @@ impl Game for KerbRacers {
             player.gas = throttle(player.gas, input.held("gas"), dt);
             player.brake = input.held("brake");
         }
-        let nearest = nearest_rival(w);
-        let loose = w.resource::<Track>().dirt;
-        sound::step(w, nearest, loose);
+        sound::tick(w, now, start, args.volume);
         camera(w, false);
         settle_board(w);
         hud(w);
@@ -659,6 +680,8 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
     for body in list.iter_mut() {
         car::locate(&t, body);
     }
+    // High quality's sun casts the cars' own shadows.
+    let live_sun = w.get::<DirectionalLight>("sun").is_some_and(|sun| sun.shadows);
     for (e, mut body) in entities.iter().zip(list) {
         let name = name_of(body.car.id);
         fx::car(w, &t, &mut body, &name, dt);
@@ -677,19 +700,13 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
         // the low sun, shrinks and fades, which is how a jump reads from above.
         let idx = car.idx as usize;
         let up = (car.y - t.surface(body.p, idx)).max(0.0);
-        // Under cloud it stays right below the car.
-        let at = if t.wet {
+        // Under cloud, or beside a real-time sun shadow, it stays right below the car.
+        let at = if t.wet || live_sun {
             body.p
         } else {
             body.p + SHADOW_OFFSET + SUN_AWAY * (up * SHADOW_REACH)
         };
-        let slope = t.gradient(at, idx);
-        let tilt = Quat::from_rotation_arc(Vec3::Y, Vec3::new(-slope.x, 1.0, -slope.y).normalize());
-        *w.require_mut::<Transform>(format!("{name}-shadow").as_str()) = Transform {
-            position: Vec3::new(at.x, t.height(at, idx) + 0.1, at.y),
-            rotation: tilt * Quat::from_rotation_y(-car.heading),
-            scale: Vec3::splat(1.0 / (1.0 + 0.35 * up)),
-        };
+        *w.require_mut::<Transform>(format!("{name}-shadow").as_str()) = blob_pose(&t, at, idx, car.heading, up);
         // On dirt every car trails dust; there is no rubber to smoke.
         let smoke = !t.dirt && !t.wet && car.sliding && car.surface != car::GRASS && speed > 5.0;
         // On a wet road every car throws up spray behind it.
@@ -763,16 +780,6 @@ fn lift_for_corners(t: &Track, body: &mut Body) {
     if v > plan * 1.14 {
         body.car.brake = true;
     }
-}
-
-/// How far (m) the nearest rival is from the player.
-fn nearest_rival(w: &World) -> f32 {
-    let me = w.require::<Transform>("player").position;
-    w.query::<(&Transform, &Car)>()
-        .iter()
-        .filter(|(_, (_, c))| c.ai)
-        .map(|(_, (p, _))| (p.position - me).length())
-        .fold(f32::MAX, f32::min)
 }
 
 /// Each wheel turns by its car's `spin` (rolling forward about the axle, which
@@ -851,6 +858,28 @@ fn puffs(w: &mut World, car: Entity, name: &str, dirt: bool, wet: bool) {
                 Ambient,
             ),
         );
+    }
+}
+
+/// A car's blob laid on the ground at `at`: tilted to the plane through the
+/// ground at its nose, tail and sides rather than the slope at one point, and
+/// lifted clear of every sample, so on a crest, in a dip or across a bank's
+/// edge it neither stands up on its side nor sinks into the ground.
+fn blob_pose(t: &Track, at: Vec2, idx: usize, heading: f32, up: f32) -> Transform {
+    // Inside the blob's 4.6 m by 2.5 m, where its shade is darkest.
+    let (reach, half) = (1.6, 0.9);
+    let fwd = Vec2::new(math::cos(heading), math::sin(heading));
+    let side = Vec2::new(-fwd.y, fwd.x);
+    let h = |d: Vec2| t.height(at + d, idx);
+    let (nose, tail) = (h(fwd * reach), h(-fwd * reach));
+    let (left, right) = (h(side * half), h(-side * half));
+    let slope = fwd * ((nose - tail) / (2.0 * reach)) + side * ((left - right) / (2.0 * half));
+    let tilt = Quat::from_rotation_arc(Vec3::Y, Vec3::new(-slope.x, 1.0, -slope.y).normalize());
+    let y = h(Vec2::ZERO).max((nose + tail) * 0.5).max((left + right) * 0.5);
+    Transform {
+        position: Vec3::new(at.x, y + 0.1, at.y),
+        rotation: tilt * Quat::from_rotation_y(-heading),
+        scale: Vec3::splat(1.0 / (1.0 + 0.35 * up)),
     }
 }
 
