@@ -705,7 +705,7 @@ pub fn road(t: &Track) -> Model {
     let red = hex(0xd83a2e);
     // In the rain at dusk the paint is grimy and dim.
     let (red, white) = if t.wet { (shade(red, 0.55), shade(white, 0.5)) } else { (red, white) };
-    let kerb = |i: usize| (0..9).any(|k| t.bend[(i + n + k - 4) % n].abs() > 1.0 / 24.0);
+    let kerb = |i: usize| t.kerb[i];
     // Across the kerb: (lateral offset from the asphalt edge inward, height).
     let profile = [(-0.15, 0.045), (0.05, 0.13), (0.45, 0.13), (0.6, 0.03)];
     let red_block = |i: usize| (i as f32 * t.step) as i32 % 2 == 0;
@@ -1456,4 +1456,139 @@ pub fn blob() -> Model {
         }],
         &["blob.tex"],
     )
+}
+
+/// One live skid mark: a dark, soft-edged streak a metre long along local X,
+/// a tyre's width across. The race scales it to the distance slid.
+pub fn skid_mark() -> Model {
+    let mut b = Builder::new();
+    let (hx, hz) = (0.5, 0.12);
+    let dark = [0.02, 0.02, 0.02, 1.0];
+    let clear = [0.02, 0.02, 0.02, 0.0];
+    // Faded at both ends, so a run of marks reads as one streak.
+    for (x0, x1, c0, c1) in [(-hx, -0.3, clear, dark), (-0.3, 0.3, dark, dark), (0.3, hx, dark, clear)] {
+        b.quad_uvc(
+            [
+                Vec3::new(x0, 0.0, -hz),
+                Vec3::new(x1, 0.0, -hz),
+                Vec3::new(x1, 0.0, hz),
+                Vec3::new(x0, 0.0, hz),
+            ],
+            [Vec2::ZERO; 4],
+            [c0, c1, c1, c0],
+        );
+    }
+    model(
+        vec![b.finish()],
+        vec![MaterialData {
+            metallic: 0.0,
+            roughness: 0.9,
+            alpha_mode: AlphaMode::Blend,
+            ..MaterialData::default()
+        }],
+        &[],
+    )
+}
+
+/// A pair of brake lamps on a car's tail, facing back along -X with a lid
+/// on top: `x` the tail's position, `y` the lamps' height and `z` their
+/// distance off centre. Under them a red wash of their light on the road
+/// behind, which is what shows from high above.
+pub fn brake_lamps(x: f32, y: f32, z: f32) -> Model {
+    let mut lamps = Builder::new();
+    let white = [1.0; 4];
+    for s in [-1.0f32, 1.0] {
+        let (z0, z1) = (s * z - 0.16, s * z + 0.16);
+        lamps.face(
+            [
+                Vec3::new(x, y - 0.08, z0),
+                Vec3::new(x, y - 0.08, z1),
+                Vec3::new(x, y + 0.08, z1),
+                Vec3::new(x, y + 0.08, z0),
+            ],
+            Vec3::NEG_X,
+            white,
+        );
+        lamps.quad_up(
+            Vec3::new(x, y + 0.08, z0),
+            Vec3::new(x + 0.14, y + 0.08, z0),
+            Vec3::new(x + 0.14, y + 0.08, z1),
+            Vec3::new(x, y + 0.08, z1),
+            white,
+        );
+    }
+    let mut wash = Builder::new();
+    let (near, far, half) = (x + 0.1, x - 1.5, 1.05);
+    let lit = [1.0, 1.0, 1.0, 0.5];
+    let dark = [1.0, 1.0, 1.0, 0.0];
+    wash.quad_uvc(
+        [
+            Vec3::new(far, 0.06, -half),
+            Vec3::new(near, 0.06, -half),
+            Vec3::new(near, 0.06, half),
+            Vec3::new(far, 0.06, half),
+        ],
+        [Vec2::ZERO; 4],
+        [dark, lit, lit, dark],
+    );
+    let mut wash = wash.finish();
+    wash.material = 1;
+    model(
+        vec![lamps.finish(), wash],
+        vec![
+            MaterialData {
+                base_color: [0.0, 0.0, 0.0, 1.0],
+                metallic: 0.0,
+                emissive: [6.0, 0.3, 0.15],
+                ..MaterialData::default()
+            },
+            MaterialData {
+                base_color: [0.9, 0.05, 0.03, 1.0],
+                metallic: 0.0,
+                emissive: [1.2, 0.06, 0.03],
+                alpha_mode: AlphaMode::Blend,
+                ..MaterialData::default()
+            },
+        ],
+        &[],
+    )
+}
+
+/// A flat chevron on the road pointing along +X, for the braking guide.
+pub fn chevron() -> MeshData {
+    let mut b = Builder::new();
+    let white = [1.0; 4];
+    let (w, d, t) = (0.55, 0.35, 0.16);
+    // Two arms meeting at the tip.
+    for s in [-1.0f32, 1.0] {
+        b.quad_up(
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(-d, 0.0, s * w),
+            Vec3::new(-d - t, 0.0, s * w),
+            Vec3::new(-t, 0.0, 0.0),
+            white,
+        );
+    }
+    b.finish()
+}
+
+/// An arrow lying beside the player's car, pointing forward along +X: the
+/// side it has chosen to pass on.
+pub fn side_arrow() -> MeshData {
+    let mut b = Builder::new();
+    let white = [1.0; 4];
+    b.quad_up(
+        Vec3::new(-0.7, 0.0, -0.11),
+        Vec3::new(0.2, 0.0, -0.11),
+        Vec3::new(0.2, 0.0, 0.11),
+        Vec3::new(-0.7, 0.0, 0.11),
+        white,
+    );
+    b.tri(
+        Vec3::new(0.2, 0.0, -0.32),
+        Vec3::new(0.75, 0.0, 0.0),
+        Vec3::new(0.2, 0.0, 0.32),
+        white,
+    );
+    b.finish()
 }

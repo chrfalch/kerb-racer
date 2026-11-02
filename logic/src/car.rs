@@ -1,6 +1,6 @@
 //! Car dynamics, the automatic steering every car shares, and the rivals'
 //! pedals. All cars step together on plain copies so they can push each other.
-use crate::track::{Track, G, HALF, RUNOFF};
+use crate::track::{Track, G, HALF, KERB_IN, RUNOFF, VMAX};
 use exact_game::*;
 
 /// Engine thrust at rest (m/s²); it fades linearly to nothing at VMAX.
@@ -36,6 +36,22 @@ pub const SLIDE: f32 = 3.0;
 /// Collision circles: two per car, fore and aft.
 pub const BODY_R: f32 = 0.86;
 pub const BODY_OFFSET: f32 = 0.72;
+/// Half a car's width to its wheels' outer edge (m), for the kerbs.
+pub const HALF_TRACK: f32 = 0.88;
+/// How far beside another car a pass aims (m between their centres).
+pub const PASS_GAP: f32 = 2.6;
+/// The closest two cars side by side may be steered (m between centres).
+pub const SIDE_GAP: f32 = 2.05;
+/// A pass holds its side until the car passed is this far behind (m).
+pub const PASS_CLEAR: f32 = 4.0;
+/// Slipstream: a car in another's wake, from this close to this far behind
+/// (m), within this much of its line, loses up to half its drag and gains top speed.
+pub const DRAFT_NEAR: f32 = 2.5;
+pub const DRAFT_FAR: f32 = 15.0;
+pub const DRAFT_WIDTH: f32 = 1.6;
+pub const DRAFT_TOP: f32 = 0.06;
+/// Kerbs: a little more bite on the raised paint.
+pub const KERB_GRIP: f32 = 1.05;
 
 #[derive(Clone, Debug, Default, Component)]
 pub struct Car {
@@ -93,6 +109,44 @@ pub struct Car {
     pub lean: f32,
     pub squash: f32,
     pub squash_v: f32,
+    /// The car being passed (its id + 1; 0 for none), and which side of it
+    /// this car goes by (1 left, -1 right), held until it is clear.
+    pub pass: u32,
+    pub pass_side: f32,
+    /// The player's chosen side (1 left, -1 right, 0 the auto-steer's own
+    /// choice) and how many more ticks it holds after the input lets go.
+    pub nudge: f32,
+    pub nudge_ticks: u32,
+    /// A rival covering the inside of the next corner (its side, 0 for none).
+    pub defend: f32,
+    /// How deep in another car's slipstream (0..1).
+    pub draft: f32,
+    /// Riding a kerb, and the kerb block under it last tick (for the rumble).
+    pub kerb: bool,
+    pub kerb_block: i32,
+    /// Forward and sideways acceleration (m/s²), smoothed, for the body's
+    /// dive, squat and roll.
+    pub accel: f32,
+    pub lateral: f32,
+    /// A rival's character: how late it dares to brake and fight (0..1), how
+    /// rarely it makes a mistake (0..1), how hard it defends (0..1).
+    pub aggression: f32,
+    pub consistency: f32,
+    pub defence: f32,
+    /// The share of its skill a rival drives at now (its pace keeping it in
+    /// touch with the player), and an overcooked corner: how far too fast and
+    /// for how many more ticks.
+    pub pace: f32,
+    pub mistake: f32,
+    pub mistake_ticks: u32,
+    /// The last 32-metre stretch a mistake was considered for.
+    pub mistake_block: u32,
+    /// Wheels locked under braking (no roll at speed).
+    pub locked: bool,
+    /// Metres travelled since this car last laid a skid mark.
+    pub skid_run: f32,
+    /// How hard (m/s of closing speed) it hit another car this tick; 0 if not.
+    pub bump: f32,
 }
 
 /// Wheel radius of every car (m).
@@ -160,60 +214,189 @@ fn wrap_angle(a: f32) -> f32 {
 /// `ahead` metres down the road.
 fn aim(track: &Track, car: &Car, ahead: f32) -> Vec2 {
     let i = track.wrap(car.idx as i64 + (ahead / track.step) as i64);
-    let offset = (track.line[i] + car.lane).clamp(-(HALF - 1.0), HALF - 1.0);
+    let offset = (track.line[i] + car.lane).clamp(-track.edge[i], track.edge[i]);
     track.at(i, offset)
 }
 
-/// The speed a rival wants now: the plan a little ahead, scaled by its nerve.
+/// The speed a rival wants now: the plan a little ahead, scaled by its nerve
+/// and its pace, too fast while it is overcooking a corner, and a little more
+/// down a straight in someone's slipstream.
 pub fn target_speed(track: &Track, car: &Car) -> f32 {
     let i = track.wrap(car.idx as i64 + (3. / track.step) as i64);
-    track.speed[i] * car.skill
+    let pace = if car.pace > 0.0 { car.pace } else { 1.0 };
+    let mut v = track.speed[i] * car.skill * pace * (1.0 + car.mistake);
+    if track.speed[i] > VMAX * 0.97 {
+        v += car.draft * 2.5;
+    }
+    v
 }
 
-/// Choose each car's lane: pull out to pass a slower car close ahead, drift
-/// back to the racing line otherwise. Rivals also lift behind a car they cannot pass.
+/// Lateral offset `PASS_GAP` beside a car at `side`, on `pass_side`.
+fn beside(side: f32, pass_side: f32) -> f32 {
+    side + PASS_GAP * pass_side
+}
+
+/// Choose each car's lane and fill in its slipstream.
+///
+/// A car that closes on a slower one picks a side and commits to it: the
+/// player's chosen side if there is room, else the inside of the next corner,
+/// else whichever side has more road. It holds that side until the car it is
+/// passing is `PASS_CLEAR` behind, so a pass never turns back into the car
+/// beside it. Nobody steers toward a car alongside. Rivals also cover the
+/// inside when someone closes from behind, lift behind a car they cannot
+/// pass, and yield a corner to the car on its inside. Returns each car's
+/// speed cap for `drive`.
 pub fn plan(track: &Track, bodies: &mut [Body], dt: f32) -> Vec<f32> {
+    let n = bodies.len();
     let length = track.length();
     let progress: Vec<f32> = bodies.iter().map(|b| b.progress(track)).collect();
-    let mut caps = vec![f32::MAX; bodies.len()];
-    for a in 0..bodies.len() {
-        let mut target = 0.0;
-        let me = &bodies[a];
-        let my_side = me.car.side;
-        let mut blocker: Option<(f32, f32, f32)> = None;
-        for (b, other) in bodies.iter().enumerate() {
-            if a == b {
+    let speed: Vec<f32> = bodies.iter().map(|b| b.v().length()).collect();
+    let side: Vec<f32> = bodies.iter().map(|b| b.car.side).collect();
+    let air: Vec<bool> = bodies.iter().map(|b| b.car.air).collect();
+    // How far `b` is up the road from `a` (negative: behind).
+    let gap = |a: usize, b: usize| {
+        let g = progress[b] - progress[a];
+        g - (g / length).round() * length
+    };
+    let mut caps = vec![f32::MAX; n];
+    for a in 0..n {
+        let car = &bodies[a].car;
+        let i = car.idx as usize;
+        let line = track.line[i];
+        let turn = track.turn_ahead(i);
+        let mine = side[a];
+        let edge = track.edge[i];
+        let room = |s: f32, other: f32| {
+            if s > 0.0 {
+                edge - other
+            } else {
+                other + edge
+            }
+        };
+
+        // Slipstream: in the wake of a car close ahead on much the same line.
+        let mut wake = 0.0f32;
+        for b in 0..n {
+            let g = gap(a, b);
+            if b != a && (DRAFT_NEAR..DRAFT_FAR).contains(&g) && (side[b] - mine).abs() < DRAFT_WIDTH && !air[b] {
+                wake = wake.max(1.0 - (g - DRAFT_NEAR) / (DRAFT_FAR - DRAFT_NEAR));
+            }
+        }
+
+        // Carry on with a pass under way, or give it up once clear (or dropped back).
+        let (mut pass, mut pass_side) = (car.pass, car.pass_side);
+        let mut want: Option<f32> = None;
+        if pass != 0 {
+            let b = (pass - 1) as usize;
+            if b >= n || !(-PASS_CLEAR..14.0).contains(&gap(a, b)) {
+                pass = 0;
+            } else {
+                // The player may switch sides while still behind.
+                if car.nudge != 0.0 && car.nudge != pass_side && gap(a, b) > 1.0 && room(car.nudge, side[b]) >= PASS_GAP {
+                    pass_side = car.nudge;
+                }
+                want = Some(beside(side[b], pass_side));
+            }
+        }
+        if pass == 0 {
+            let mut blocker: Option<(f32, usize)> = None;
+            for b in 0..n {
+                let g = gap(a, b);
+                if b != a && g > 0.5 && g < 11.0 && (side[b] - mine).abs() < 2.4 && blocker.is_none_or(|(c, _)| g < c) {
+                    blocker = Some((g, b));
+                }
+            }
+            if let Some((g, b)) = blocker {
+                if speed[a] + 0.5 > speed[b] {
+                    let other = side[b];
+                    let prefer = if car.nudge != 0.0 {
+                        car.nudge
+                    } else if turn != 0.0 {
+                        turn
+                    } else if room(1.0, other) > room(-1.0, other) {
+                        1.0
+                    } else {
+                        -1.0
+                    };
+                    let chosen = if room(prefer, other) >= PASS_GAP {
+                        prefer
+                    } else if room(-prefer, other) >= PASS_GAP {
+                        -prefer
+                    } else {
+                        0.0
+                    };
+                    if chosen != 0.0 {
+                        pass = b as u32 + 1;
+                        pass_side = chosen;
+                        want = Some(beside(other, chosen));
+                    } else if car.ai && g < 6.0 {
+                        // No way by: follow a couple of car lengths back.
+                        caps[a] = speed[b] + (g - 3.0) * 0.8;
+                    }
+                }
+            }
+        }
+
+        // A rival covers the inside once, against a car closing from behind.
+        let mut defend = car.defend;
+        if car.ai && pass == 0 {
+            let threat = (0..n).any(|b| {
+                let g = gap(a, b);
+                b != a && (-9.0..-1.2).contains(&g) && speed[b] > speed[a] + 0.3
+            });
+            if !threat {
+                defend = 0.0;
+            } else if defend == 0.0 && turn != 0.0 && car.defence > 0.35 {
+                defend = turn;
+            }
+            if defend != 0.0 {
+                want = Some(defend * (edge - 0.4) * car.defence.min(1.0));
+            }
+        } else {
+            defend = 0.0;
+        }
+        // The player's side with nobody to pass: move over (to line up a
+        // slipstream, or to cover the inside).
+        if !car.ai && pass == 0 && car.nudge != 0.0 {
+            want = Some(line + car.nudge * 2.2);
+        }
+
+        // Never steer into a car alongside: keep its width plus a little away.
+        let mut lo = -edge - line;
+        let mut hi = edge - line;
+        for b in 0..n {
+            if b == a || gap(a, b).abs() > 3.4 || air[b] != air[a] {
                 continue;
             }
-            let mut gap = progress[b] - progress[a];
-            gap -= (gap / length).round() * length;
-            if gap > 0.5 && gap < 11.0 && (other.car.side - my_side).abs() < 2.4 {
-                let closer = blocker.is_none_or(|(g, _, _)| gap < g);
-                if closer {
-                    blocker = Some((gap, other.car.side, other.v().length()));
-                }
+            if side[b] > mine + 0.25 {
+                hi = hi.min(side[b] - SIDE_GAP - line);
+            } else if side[b] < mine - 0.25 {
+                lo = lo.max(side[b] + SIDE_GAP - line);
+            }
+            // Side by side into a corner: the car on the outside gives way.
+            let alongside = gap(a, b) > -1.6;
+            let outside = turn != 0.0 && (mine - side[b]) * turn < -0.5;
+            let braking = track.speed[track.wrap(i as i64 + (20.0 / track.step) as i64)] < speed[a] - 3.0;
+            if car.ai && alongside && outside && braking && pass as usize != b + 1 {
+                caps[a] = caps[a].min(speed[b] - 0.6);
             }
         }
-        if let Some((gap, side, speed)) = blocker {
-            if me.v().length() + 0.5 > speed {
-                let i = me.car.idx as usize;
-                let line = track.line[i];
-                let room_left = (HALF - 1.0) - side;
-                let room_right = side + (HALF - 1.0);
-                let pass = if room_left > room_right {
-                    side + 2.5
-                } else {
-                    side - 2.5
-                };
-                target = (pass - line).clamp(-(HALF - 1.0) - line, (HALF - 1.0) - line);
-                if room_left.max(room_right) < 2.6 && gap < 5.0 {
-                    caps[a] = speed;
-                }
-            }
-        }
+        let target = want.map_or(0.0, |s| s - line);
+        let target = if lo <= hi {
+            target.clamp(lo, hi)
+        } else {
+            // Squeezed on both sides: hold the lane.
+            car.lane
+        };
+
         let car = &mut bodies[a].car;
+        car.pass = pass;
+        car.pass_side = pass_side;
+        car.defend = defend;
         car.lane_target = target;
-        let step = 2.2 * dt;
+        car.draft += (wake - car.draft) * (dt * 2.5).min(1.0);
+        let rate = if pass != 0 { 3.0 } else { 2.2 };
+        let step = rate * dt;
         car.lane += (car.lane_target - car.lane).clamp(-step, step);
     }
     caps
@@ -230,6 +413,43 @@ pub fn drive(track: &Track, body: &mut Body, cap: f32) {
         body.car.brake = false;
         body.car.gas = ((target - v) * 1.5 + 0.35).clamp(0.0, 1.0);
     }
+}
+
+/// A rival's slips: now and then, entering a braking zone, it carries too
+/// much speed into the corner. The chance falls with its consistency and is
+/// fixed by the car, the lap and the stretch of road, so a race replays.
+pub fn blunder(track: &Track, car: &mut Car) {
+    car.mistake_ticks = car.mistake_ticks.saturating_sub(1);
+    if car.mistake_ticks == 0 {
+        car.mistake = 0.0;
+    }
+    let block = car.idx / 32;
+    let mark = car.crossings * 1000 + block + 1;
+    if car.mistake_block == mark {
+        return;
+    }
+    let i = car.idx as usize;
+    let ahead = track.speed[track.wrap(i as i64 + (18.0 / track.step) as i64)];
+    if ahead > track.speed[i] - 4.0 {
+        return;
+    }
+    car.mistake_block = mark;
+    let roll = hash01(car.id, car.crossings, block);
+    if roll < (1.0 - car.consistency) * 0.32 {
+        car.mistake = 0.07 + 0.05 * hash01(car.id + 17, car.crossings, block);
+        car.mistake_ticks = 300;
+    }
+}
+
+/// A well-mixed number in 0..1 from three small integers.
+pub fn hash01(a: u32, b: u32, c: u32) -> f32 {
+    let mut h = a.wrapping_mul(0x9e37_79b1) ^ b.wrapping_mul(0x85eb_ca77) ^ c.wrapping_mul(0xc2b2_ae3d);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b_3c6d);
+    h ^= h >> 12;
+    h = h.wrapping_mul(0x297a_2d39);
+    h ^= h >> 15;
+    (h >> 8) as f32 / (1u32 << 24) as f32
 }
 
 /// One fixed step of one car on its own: steering, pedals, grip, fences.
@@ -253,8 +473,17 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     let speed = body.v().length();
     let air = body.car.air;
     let slope = track.gradient(body.p, body.car.idx as usize);
+    let idx = body.car.idx as usize;
+    // How far over the planned speed: too fast and the auto-steer can't hold
+    // the line. It looks further and turns less, running wide toward the kerb
+    // and the run-off, which reads as the driver's own doing.
+    let plan = track.speed[track.wrap(idx as i64 + (6.0 / track.step) as i64)].max(4.0);
+    let over = (speed / plan - 1.04).max(0.0);
+    // Trail-braking: on the brake while turning in, the weight on the nose
+    // tightens the line.
+    let trail = body.car.brake && !body.car.locked && speed > 8.0;
     // Steering: pure pursuit toward the aim point, limited by the wheels.
-    let ahead = 4.5 + 0.32 * speed;
+    let ahead = (4.5 + 0.32 * speed) * (1.0 + over * 1.5);
     let target = aim(track, &body.car, ahead) - body.p;
     // Aim along where the car is going, not where its nose points, so a
     // drift doesn't fool the steering into running wide.
@@ -267,8 +496,9 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     let across = f.perp_dot(target);
     let alpha = math::atan2(across, along.max(0.01));
     let curvature = 2.0 * math::sin(alpha) / target.length().max(1.0);
-    let mut yaw = speed * curvature;
-    let max_yaw = (speed / 4.0).min(3.6);
+    let bite = (1.0 / (1.0 + 3.0 * over)) * if trail { 1.18 } else { 1.0 };
+    let mut yaw = speed * curvature * bite;
+    let max_yaw = (speed / 4.0).min(3.6) * if trail { 1.12 } else { 1.0 };
     yaw = yaw.clamp(-max_yaw, max_yaw);
     // In the air the tyres have nothing to turn against.
     if air {
@@ -289,26 +519,43 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
         (true, _) => GRIP_DIRT_GRASS,
     };
     let grip = if track.wet { grip * crate::track::WET } else { grip };
+    let grip = if body.car.kerb { grip * KERB_GRIP } else { grip };
     let grip = grip * body.car.load.clamp(0.3, 1.5) * (1.0 - 0.55 * body.car.shaken);
-    let (drift, brake, max_slip) = if track.dirt {
+    let (mut drift, brake, mut max_slip) = if track.dirt {
         (DRIFT_DIRT, BRAKE_DIRT, MAX_SLIP_DIRT)
     } else {
         (DRIFT, BRAKE, MAX_SLIP)
     };
+    // On loose or wet ground the throttle steers the tail: gas held through a
+    // slide keeps it hanging out, a lift lets the tyres straighten it.
+    let loose = track.dirt || track.wet;
+    if loose && body.car.sliding && body.car.gas > 0.5 {
+        drift *= 0.6;
+        max_slip += 0.12;
+    }
+    // A trail-braked entry lets the tail step out a little to point the nose.
+    if trail {
+        drift *= 0.85;
+    }
     let f = body.forward();
     let l = f.perp();
     let mut vf = body.v().dot(f);
+    let before = vf;
     let mut vl = body.v().dot(l);
+    // In someone's slipstream the air holds the car back less.
+    let draft = body.car.draft;
+    let drag = 0.0012 * (1.0 - 0.5 * draft);
     // Pedals; in the air the engine only revs and the brakes only stop the wheels.
     if air {
         // Only the air slows it.
-        vf -= 0.0012 * vf * vf * dt;
+        vf -= drag * vf * vf * dt;
     } else if body.car.brake {
         vf -= brake.min(vf.abs() / dt).copysign(vf) * dt;
     } else {
-        let thrust = ENGINE * (1.0 - vf / TOP).max(0.0) * body.car.gas;
+        let top = TOP * (1.0 + DRAFT_TOP * draft);
+        let thrust = ENGINE * (1.0 - vf / top).max(0.0) * body.car.gas;
         let coast = COAST * (1.0 - body.car.gas);
-        vf += (thrust - ROLL - coast - 0.0012 * vf * vf) * dt;
+        vf += (thrust - ROLL - coast - drag * vf * vf) * dt;
     }
     if !air {
         match surface {
@@ -342,6 +589,12 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
             body.car.heading = wrap_angle(travel + max_slip.copysign(slip));
         }
     }
+    // What the body feels: braking and accelerating along it, cornering across it.
+    let k = (dt * 8.0).min(1.0);
+    let accel = if air { 0.0 } else { (vf - before) / dt };
+    let lateral = if air { 0.0 } else { vf * yaw };
+    body.car.accel += (accel - body.car.accel) * k;
+    body.car.lateral += (lateral - body.car.lateral) * k;
     body.p += v * dt;
     if air {
         // Nothing for the tyres to roll on: they keep turning as they were.
@@ -350,6 +603,7 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     } else {
         wheels(&mut body.car, vf, dt);
     }
+    body.car.locked = !air && body.car.brake && body.car.roll == 0.0 && vf > 3.0;
     locate(track, body);
     fence(track, body);
     vertical(track, body, slope, dt);
@@ -408,6 +662,11 @@ fn vertical(track: &Track, body: &mut Body, slope: Vec2, dt: f32) {
     pose(car, slope, dt);
 }
 
+/// Body pitch (radians) per m/s² of forward acceleration, and roll per m/s²
+/// sideways: about 3° of dive braking hard and 3° of roll in a fast corner.
+pub const PITCH_PER_G: f32 = 0.0022;
+pub const ROLL_PER_G: f32 = 0.0036;
+
 /// The body's tilt and suspension, for drawing: lie along the ground, lift
 /// the nose a little with the flight path, squash on landings.
 fn pose(car: &mut Car, slope: Vec2, dt: f32) {
@@ -418,6 +677,16 @@ fn pose(car: &mut Car, slope: Vec2, dt: f32) {
         (math::atan(car.vy / speed.max(4.0)) * 0.5, 0.0, 3.0)
     } else {
         (math::atan(slope.dot(f)), -math::atan(slope.dot(l)), 14.0)
+    };
+    // Weight transfer on the springs: the nose dives under braking and lifts
+    // under power, the body rolls toward the outside of a corner.
+    let (pitch, lean) = if car.air {
+        (pitch, lean)
+    } else {
+        (
+            pitch + (car.accel * PITCH_PER_G).clamp(-0.07, 0.03),
+            lean - (car.lateral * ROLL_PER_G).clamp(-0.08, 0.08),
+        )
     };
     let k = (dt * rate).min(1.0);
     car.pitch += (pitch - car.pitch) * k;
@@ -442,6 +711,19 @@ pub fn locate(track: &Track, body: &mut Body) -> bool {
     } else {
         GRASS
     };
+    // On a kerb when the outside wheels are up on its paint.
+    let kerb = track.kerb[i] && !body.car.air && off + HALF_TRACK > HALF - KERB_IN && off < HALF + 0.9;
+    if kerb {
+        // Each red or white block is a metre long; crossing from one to the
+        // next jolts the suspension (the rumble).
+        let block = (i as f32 * track.step) as i32;
+        if body.car.kerb && block != body.car.kerb_block {
+            let speed = body.v().length();
+            body.car.squash_v -= (0.12 + speed * 0.012).min(0.5);
+        }
+        body.car.kerb_block = block;
+    }
+    body.car.kerb = kerb;
     let n = track.len();
     if before > n * 3 / 4 && i < n / 4 {
         body.car.crossings += 1;
@@ -515,6 +797,25 @@ pub fn collide(track: &Track, bodies: &mut [Body]) {
                         let (va, vb) = (bodies[a].v() - n * j, bodies[b].v() + n * j);
                         bodies[a].set_v(va);
                         bodies[b].set_v(vb);
+                        // Running into the back of a car costs the one behind:
+                        // it scrubs more speed, and the car it hit is unsettled.
+                        for k in [a, b] {
+                            bodies[k].car.bump = bodies[k].car.bump.max(-closing);
+                        }
+                        let hit = (-closing - 1.0).max(0.0);
+                        if hit > 0.0 {
+                            let a_behind = bodies[a].forward().dot(n) > 0.5;
+                            let b_behind = bodies[b].forward().dot(-n) > 0.5;
+                            for (rear, front) in [(a, b), (b, a)] {
+                                let behind = if rear == a { a_behind } else { b_behind };
+                                if behind {
+                                    let v = bodies[rear].v();
+                                    bodies[rear].set_v(v * (1.0 - (0.04 * hit).min(0.25)));
+                                    let car = &mut bodies[front].car;
+                                    car.shaken = car.shaken.max((hit * 0.12).min(0.6));
+                                }
+                            }
+                        }
                     }
                 }
             }
