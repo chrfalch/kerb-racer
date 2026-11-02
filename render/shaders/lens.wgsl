@@ -28,6 +28,10 @@ struct Lens {
     band_ramp: f32,
     // Saturation of the grade: above 1 the colours read as painted toys.
     saturation: f32,
+    // A wet road's mirror: how strongly lamps streak down the tarmac below
+    // them (0 when dry), and how far, in pixels.
+    wet: f32,
+    streak: f32,
 }
 
 @vertex fn lens_vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -73,6 +77,25 @@ fn coc(y: f32, d: f32) -> f32 {
             weight += w;
         }
         color = sum / weight;
+    }
+    // On a wet road every lamp throws a long shimmering streak toward the
+    // viewer: gather the bright light above each pixel (further up the road),
+    // fading with the distance, broken up a little by the rain on the surface.
+    if (lens.wet > 0.0 && d > 0.0) {
+        var glint = vec3(0.0);
+        let taps = 16;
+        // Interleaved-gradient noise staggers the taps per pixel, so the
+        // streak reads as a smooth smear rather than a ladder of copies.
+        let dither = fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+        for (var k = 0; k < taps; k++) {
+            let f = (f32(k) + dither) / f32(taps);
+            let jitter = sin(p.y * 0.21 + f * 23.0) * f * lens.streak * 0.012;
+            let q = texel(p - vec2(jitter, f * lens.streak));
+            let c = textureLoad(scene, q, 0).rgb;
+            let hot = max(dot(c, vec3(0.2126, 0.7152, 0.0722)) - 2.0, 0.0);
+            glint += c * min(hot, 3.0) * (1.0 - f) * (1.0 - f);
+        }
+        color += glint * lens.wet / f32(taps);
     }
     // A softer palette: ease saturation and contrast toward a mid grey, so the
     // greens and paints sit together instead of shouting.

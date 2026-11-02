@@ -75,7 +75,7 @@ impl Hooks for Lens {
         let uniform = self.uniform.get_or_insert_with(|| {
             gpu.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("lens"),
-                size: 48,
+                size: 56,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
@@ -95,6 +95,13 @@ impl Hooks for Lens {
             None => (41.0, 0.5),
         };
         let (w, h) = (view.pixels.0 as f32, view.pixels.1 as f32);
+        // In the rain (Misty Moor) the grade turns cool and drained, the
+        // corners darker: dusk under cloud rather than a sunny afternoon.
+        let (vignette, warmth, saturation, wet) = if world.named("rain").is_some() {
+            (0.55, -0.07, 0.72, 1.4)
+        } else {
+            (0.36, 0.05, 1.0, 0.0)
+        };
         // The blur scales with the picture, so every size looks the same.
         let words = [
             focus,
@@ -103,12 +110,14 @@ impl Hooks for Lens {
             h * 0.016,
             w,
             h,
-            0.36,
-            0.05,
+            vignette,
+            warmth,
             band,
             0.09,
             0.28,
-            1.0,
+            saturation,
+            wet,
+            h * 0.06,
         ];
         gpu.queue
             .write_buffer(uniform, 0, &words.map(f32::to_le_bytes).concat());

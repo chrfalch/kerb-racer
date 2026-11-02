@@ -13,7 +13,7 @@ use track::Track;
 #[derive(Args)]
 pub struct Options {
     pub seed: u64,
-    /// Which circuit: 0 Pine Hollow, 1 Fern Loop, 2 Kerb Ring, 3 Gravel Pit (dirt).
+    /// Which circuit: 0 Pine Hollow, 1 Fern Loop, 2 Kerb Ring, 3 Gravel Pit (dirt), 4 Misty Moor (wet, at dusk).
     pub track: u32,
     pub laps: u32,
     /// Graphics: 0 low (no undergrowth), 1 medium (baked shadows, the default), 2 high (real-time sun shadows, haze and bloom).
@@ -42,6 +42,10 @@ impl Default for Options {
 
 /// Where a car's blob shadow falls from its centre: away from the low western sun.
 pub const SHADOW_OFFSET: Vec2 = Vec2::new(1.1, 0.45);
+/// The direction the sun throws shadows along the ground, and how far (m) per
+/// metre of height: it stands about 18° above the horizon.
+pub const SUN_AWAY: Vec2 = Vec2::new(0.928, 0.371);
+pub const SHADOW_REACH: f32 = 3.0;
 
 /// Seconds of countdown before the lights go out.
 pub const COUNTDOWN: f32 = 3.0;
@@ -106,6 +110,10 @@ pub struct Race {
     /// Where the camera looks, eased toward the player's path.
     pub focus_x: f32,
     pub focus_z: f32,
+    /// The ground height the camera looks at, eased like the focus.
+    pub focus_y: f32,
+    /// The camera's shake after the player lands hard (m), dying away.
+    pub shake: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Data)]
@@ -164,7 +172,8 @@ pub struct Hud {
     pub speed: u32,
     pub gas: bool,
     pub brake: bool,
-    pub sliding: bool,
+    /// The player's car is in the air off a jump.
+    pub air: bool,
     pub off: bool,
     pub standings: Vec<Row>,
     pub radar: Radar,
@@ -290,7 +299,7 @@ impl Game for KerbRacers {
     fn setup(w: &mut World, args: &Options) {
         w.reseed(args.seed);
         let t = track::build(args.track % track::LAYOUTS.len() as u32);
-        light(w, args.quality);
+        light(w, args.quality, t.wet);
         let id = t.id;
         let ground = w
             .generated_model(&format!("ground-{id}.model"), scenery::ground(&t))
@@ -300,8 +309,8 @@ impl Game for KerbRacers {
             .generated_model(&format!("road-{id}.model"), scenery::road(&t))
             .expect("road");
         w.spawn_named("road", (Transform::default(), road));
-        // No flowers on the dirt track's scree.
-        if !t.dirt {
+        // No flowers on the dirt track's scree, nor up on the wet moor.
+        if !t.dirt && !t.wet {
             let flowers = scenery::flowers(w, &t);
             let flowers = w
                 .generated(&format!("flowers-{id}.model"), flowers)
@@ -309,10 +318,11 @@ impl Game for KerbRacers {
             w.spawn_named("flowers", (Transform::default(), flowers, Ambient));
         }
         for prop in scenery::props(w, &t, args.quality) {
+            let ground = t.height_any(prop.at) - prop.sink;
             let e = w.spawn((
                 Transform {
-                    position: Vec3::new(prop.at.x, 0.0, prop.at.y),
-                    rotation: Quat::from_rotation_y(-prop.yaw),
+                    position: Vec3::new(prop.at.x, ground, prop.at.y),
+                    rotation: Quat::from_rotation_y(-prop.yaw) * Quat::from_rotation_z(prop.pitch),
                     scale: prop.scale,
                 },
                 Mesh::asset(prop.model),
@@ -330,8 +340,10 @@ impl Game for KerbRacers {
         // Real-time sun shadows are the costliest thing on screen (Safari's
         // WebGPU above all), so below high quality the woods' shadows are baked
         // into an overlay and each car carries a soft blob instead.
-        let baked = args.quality < 2;
-        if baked {
+        // Under the rain clouds there is no sun: no shade to bake, only a
+        // soft contact shadow right under each car.
+        let baked = args.quality < 2 || t.wet;
+        if baked && !t.wet {
             let shade = w
                 .generated_model(&format!("shade-{id}.model"), scenery::shade_overlay(&t))
                 .expect("shade");
@@ -351,11 +363,12 @@ impl Game for KerbRacers {
             let f = t.tangent(idx);
             let heading = math::atan2(f.y, f.x);
             let model = Mesh::asset(format!("car-{k}.model"));
+            let y = t.surface(p, idx);
             let e = w.spawn_named(
                 name_of(k),
                 (
                     Transform {
-                        position: Vec3::new(p.x, 0.0, p.y),
+                        position: Vec3::new(p.x, y, p.y),
                         rotation: Quat::from_rotation_y(-heading),
                         scale: Vec3::ONE,
                     },
@@ -367,12 +380,17 @@ impl Game for KerbRacers {
                         heading,
                         idx: idx as u32,
                         side,
+                        y,
+                        load: 1.0,
                         ..Car::default()
                     },
                 ),
             );
             cars.push((k, e));
-            puffs(w, e, &name_of(k), t.dirt);
+            puffs(w, e, &name_of(k), t.dirt, t.wet);
+            if t.wet {
+                headlights(w, e);
+            }
             let (front, rear, track, rims) = wheel_layout(k);
             for (x, is_front) in [(front, true), (rear, false)] {
                 // Blender's left (+Y) is the game's -Z.
@@ -389,7 +407,7 @@ impl Game for KerbRacers {
             w.spawn_named(
                 format!("{}-shadow", name_of(k)),
                 (
-                    Transform::at(p.x + SHADOW_OFFSET.x, 0.1, p.y + SHADOW_OFFSET.y),
+                    Transform::at(p.x, y + 0.1, p.y),
                     blob.clone(),
                     Visible(baked),
                     Ambient,
@@ -415,6 +433,7 @@ impl Game for KerbRacers {
         }
         sound::setup(w, &cars, t.dirt);
         let start = t.at(t.wrap(-12), 0.0);
+        let focus_y = t.surface(start, t.wrap(-12));
         w.insert_resource(Race {
             laps: args.laps,
             start: w.tick() + (COUNTDOWN * Self::HZ as f32) as u64,
@@ -422,7 +441,12 @@ impl Game for KerbRacers {
             board: Vec::new(),
             focus_x: start.x,
             focus_z: start.y,
+            focus_y,
+            shake: 0.0,
         });
+        if t.wet {
+            rain(w);
+        }
         w.insert_resource(t);
         w.spawn_named(
             "camera",
@@ -465,7 +489,7 @@ impl Game for KerbRacers {
                     .clamp(0.0, 1.0);
                 let near = Vec2::new(eye.x + flat.x * s - at.x, eye.z + flat.y * s - at.z).length();
                 let y = eye.y + d.y * s;
-                near < crown.radius && y < crown.height
+                near < crown.radius && y < at.y + crown.height
             });
             if hidden {
                 fade.push(e);
@@ -555,27 +579,55 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
             }
         }
     }
-    car::collide(&mut list);
+    car::collide(&t, &mut list);
     turn_wheels(w, &entities, &list);
+    let shake = list
+        .iter()
+        .find(|b| b.car.id == PLAYER)
+        .map_or(0.0, |b| b.car.landing);
+    if shake > 1.0 {
+        let mut race = w.resource_mut::<Race>();
+        race.shake = race.shake.max((shake * 0.045).min(0.32));
+    }
     for body in list.iter_mut() {
         car::locate(&t, body);
     }
     for (e, body) in entities.iter().zip(list) {
+        let car = &body.car;
         let mut pose = w.require_mut::<Transform>(*e);
-        pose.position = Vec3::new(body.p.x, 0.0, body.p.y);
-        pose.rotation = Quat::from_rotation_y(-body.car.heading);
+        pose.position = Vec3::new(body.p.x, car.y + car.squash, body.p.y);
+        pose.rotation = Quat::from_rotation_y(-car.heading)
+            * Quat::from_rotation_z(car.pitch)
+            * Quat::from_rotation_x(car.lean);
         drop(pose);
-        let speed = Vec2::new(body.car.vx, body.car.vz).length();
-        let name = name_of(body.car.id);
+        let speed = Vec2::new(car.vx, car.vz).length();
+        let name = name_of(car.id);
+        // The shadow lies on the ground below: in the air it slides away from
+        // the low sun, shrinks and fades, which is how a jump reads from above.
+        let idx = car.idx as usize;
+        let up = (car.y - t.surface(body.p, idx)).max(0.0);
+        // Under cloud it stays right below the car.
+        let at = if t.wet {
+            body.p
+        } else {
+            body.p + SHADOW_OFFSET + SUN_AWAY * (up * SHADOW_REACH)
+        };
+        let slope = t.gradient(at, idx);
+        let tilt = Quat::from_rotation_arc(Vec3::Y, Vec3::new(-slope.x, 1.0, -slope.y).normalize());
         *w.require_mut::<Transform>(format!("{name}-shadow").as_str()) = Transform {
-            position: Vec3::new(body.p.x + SHADOW_OFFSET.x, 0.1, body.p.y + SHADOW_OFFSET.y),
-            rotation: Quat::from_rotation_y(-body.car.heading),
-            scale: Vec3::ONE,
+            position: Vec3::new(at.x, t.height(at, idx) + 0.1, at.y),
+            rotation: tilt * Quat::from_rotation_y(-car.heading),
+            scale: Vec3::splat(1.0 / (1.0 + 0.35 * up)),
         };
         // On dirt every car trails dust; there is no rubber to smoke.
-        let smoke =
-            !t.dirt && body.car.sliding && body.car.surface != car::GRASS && speed > 5.0;
-        let dust = (t.dirt || body.car.surface != car::ASPHALT) && speed > 3.0;
+        let smoke = !t.dirt && !t.wet && car.sliding && car.surface != car::GRASS && speed > 5.0;
+        // On a wet road every car throws up spray behind it.
+        let dust = (t.dirt || car.surface != car::ASPHALT || (t.wet && speed > 9.0)) && speed > 3.0 && !car.air;
+        // A hard landing throws up a cloud, wherever it comes down.
+        if car.landing > 1.0 {
+            let puff = (6.0 + car.landing * 3.0).min(26.0) as u32;
+            w.require_mut::<Emitter>(format!("{name}-dust").as_str()).state.burst += puff;
+        }
         for (suffix, on) in [("smoke", smoke), ("dust", dust)] {
             let target = format!("{name}-{suffix}");
             // Read first: a mutable borrow marks the row written even when nothing changes.
@@ -603,9 +655,15 @@ fn turn_wheels(w: &mut World, cars: &[Entity], bodies: &[Body]) {
         let steer = if front { car.steer } else { 0.0 };
         // Heading grows toward the car's local +Z, so a turn that way is -Y.
         let rotation = Quat::from_rotation_y(-steer) * Quat::from_rotation_z(-car.spin);
+        // The wheels stay on the road while the body squashes, and hang a
+        // little in the air.
+        let y = car::WHEEL_R - car.squash - if car.air { 0.07 } else { 0.0 };
         // Read first: a mutable borrow marks the row written even when nothing changes.
-        if w.require::<Transform>(e).rotation != rotation {
-            w.require_mut::<Transform>(e).rotation = rotation;
+        let pose = *w.require::<Transform>(e);
+        if pose.rotation != rotation || pose.position.y != y {
+            let mut pose = w.require_mut::<Transform>(e);
+            pose.rotation = rotation;
+            pose.position.y = y;
         }
     }
 }
@@ -613,8 +671,11 @@ fn turn_wheels(w: &mut World, cars: &[Entity], bodies: &[Body]) {
 /// Two trails behind each car: white tyre smoke for a slide on the road,
 /// brown dust off it. Both stay where they were born and start switched off.
 /// On a dirt track the dust is a pale ochre plume, thicker and longer-lived.
-fn puffs(w: &mut World, car: Entity, name: &str, dirt: bool) {
-    let dust = if dirt {
+fn puffs(w: &mut World, car: Entity, name: &str, dirt: bool, wet: bool) {
+    let dust = if wet {
+        // Spray off the wet road: pale, cool, lingering in the damp air.
+        ([0.45, 0.52, 0.54, 0.16], [0.4, 0.47, 0.5, 0.0], [0.8, 3.6])
+    } else if dirt {
         ([0.78, 0.64, 0.45, 0.5], [0.82, 0.72, 0.56, 0.0], [0.8, 3.2])
     } else {
         ([0.62, 0.45, 0.28, 0.42], [0.66, 0.55, 0.4, 0.0], [0.6, 2.2])
@@ -659,7 +720,11 @@ fn puffs(w: &mut World, car: Entity, name: &str, dirt: bool) {
 
 /// A low, late-afternoon sun from the west: long shadows across the road,
 /// warm light on everything facing it, cool sky in the shade, a golden haze.
-fn light(w: &mut World, quality: u32) {
+fn light(w: &mut World, quality: u32, wet: bool) {
+    if wet {
+        dusk(w, quality);
+        return;
+    }
     w.insert_resource(Environment {
         background: Some([0.42, 0.36, 0.22].into()),
         zenith: [0.22, 0.34, 0.55],
@@ -714,6 +779,126 @@ fn light(w: &mut World, quality: u32) {
     );
 }
 
+/// Misty Moor: a raincloud at dusk. A low teal sky, thick mist pooled in the
+/// hollows, no sun; the cars' headlights carry the scene, so the haze and
+/// bloom that are High's alone elsewhere are on at every quality here.
+fn dusk(w: &mut World, quality: u32) {
+    let mist = [0.15, 0.21, 0.22];
+    w.insert_resource(Environment {
+        background: Some(mist.into()),
+        zenith: [0.08, 0.12, 0.14],
+        horizon: [0.14, 0.19, 0.2],
+        ground: [0.02, 0.03, 0.03],
+        ambient: 0.35,
+        sun_disc: 0.0,
+        exposure: 0.85,
+        tone_mapping: ToneMapping::Aces,
+        fog: Some(Fog {
+            color: Some(mist.into()),
+            ..Fog::new(0.024, 0.12)
+        }),
+        bloom: Some(Bloom {
+            threshold: 0.9,
+            intensity: 0.45,
+            radius: 2.2,
+        }),
+    });
+    if quality >= 1 {
+        w.insert_resource(AmbientOcclusion {
+            radius: 1.2,
+            intensity: 0.7,
+            ..AmbientOcclusion::default()
+        });
+    }
+    // What little daylight gets through the cloud, from the last of the
+    // light low in the west: enough to model the hills.
+    w.spawn_named(
+        "sky",
+        (
+            Transform::at(-60.0, 40.0, -25.0).looking_at(Vec3::ZERO, Vec3::Y),
+            DirectionalLight {
+                color: [0.55, 0.7, 0.75],
+                illuminance: 1500.0,
+                shadows: false,
+            },
+        ),
+    );
+}
+
+/// A car's two headlights, cones thrown down the road ahead, and the red glow
+/// of its tail lights on the wet tarmac behind. The car's +X is forward; a
+/// spot shines along its own -Z.
+fn headlights(w: &mut World, car: Entity) {
+    let ahead = Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2) * Quat::from_rotation_x(-0.2);
+    for side in [-0.56f32, 0.56] {
+        w.spawn((
+            Transform {
+                position: Vec3::new(1.85, 0.7, side),
+                rotation: ahead,
+                scale: Vec3::ONE,
+            },
+            SpotLight {
+                color: [1.0, 0.86, 0.62],
+                intensity: 300000.0,
+                range: 32.0,
+                inner: 0.22,
+                outer: 0.5,
+            },
+            Parent(car),
+            Ambient,
+        ));
+    }
+    w.spawn((
+        Transform::at(-2.3, 0.6, 0.0),
+        PointLight {
+            color: [1.0, 0.12, 0.08],
+            intensity: 4000.0,
+            range: 7.0,
+        },
+        Parent(car),
+        Ambient,
+    ));
+}
+
+/// Rain: streaks falling through a box round the camera's focus, which the
+/// camera carries along (see `camera`).
+fn rain(w: &mut World) {
+    let rain = w.spawn_named(
+        "rain",
+        (
+            // Upside down, so the emitter's +Y falls.
+            Transform {
+                position: Vec3::ZERO,
+                rotation: Quat::from_rotation_x(std::f32::consts::PI),
+                scale: Vec3::ONE,
+            },
+            Emitter {
+                shape: emitter::Shape::Box(Vec3::new(30.0, 0.5, 26.0)),
+                rate: 700.0,
+                lifetime: 0.75,
+                speed: 22.0,
+                spread: 0.06,
+                gravity: Vec3::ZERO,
+                drag: 0.0,
+                size: [0.022, 0.022],
+                color: [[0.6, 0.7, 0.74, 0.16], [0.6, 0.7, 0.74, 0.08]],
+                seed: 99,
+                bound: [-32.0, -1.0, -28.0, 32.0, 18.0, 28.0],
+                additive: true,
+                running: true,
+                ..Emitter::default()
+            },
+            ParticleLook {
+                stretch: 0.04,
+                ..ParticleLook::default()
+            },
+            emitter::WorldSpace::default(),
+            Ambient,
+        ),
+    );
+    let _ = rain;
+}
+
 /// Ease the camera's focus toward a point ahead of the player.
 fn camera(w: &mut World, snap: bool) {
     let (p, v) = {
@@ -725,17 +910,34 @@ fn camera(w: &mut World, snap: bool) {
         )
     };
     let target = p + v * 0.35;
+    let ground = w.require::<Car>("player").y;
     let dt = w.dt();
-    let focus = {
+    let now = w.tick() as f32 * dt;
+    let (focus, shake) = {
         let mut race = w.resource_mut::<Race>();
         let k = if snap { 1.0 } else { (dt * 3.0).min(1.0) };
         race.focus_x += (target.x - race.focus_x) * k;
         race.focus_z += (target.y - race.focus_z) * k;
+        // Heights ease slower, so bumps and jumps don't bob the view.
+        let ky = if snap { 1.0 } else { (dt * 1.5).min(1.0) };
+        race.focus_y += (ground - race.focus_y) * ky;
+        race.shake *= 1.0 - (dt * 7.0).min(1.0);
         // Aim up-screen of the car, so it sits below the middle with more road ahead.
-        Vec3::new(race.focus_x, 0.0, race.focus_z - 3.0)
+        (Vec3::new(race.focus_x, race.focus_y, race.focus_z - 3.0), race.shake)
     };
+    let jolt = Vec3::new(
+        math::sin(now * 53.0),
+        math::sin(now * 71.0 + 1.3),
+        math::sin(now * 61.0 + 2.1),
+    ) * shake;
+    if let Some(rain) = w.named("rain") {
+        w.require_mut::<Transform>(rain).position = focus + Vec3::Y * 15.0;
+    }
     let mut cam = w.require_mut::<Transform>("camera");
-    *cam = Transform::at(focus.x, 33.0, focus.z + 24.0).looking_at(focus, Vec3::Y);
+    // A little lower and further back than straight down, so hills and jumps
+    // show as depth as well as light.
+    *cam = Transform::at(focus.x, focus.y + 30.0, focus.z + 27.0).looking_at(focus, Vec3::Y);
+    cam.position += jolt;
 }
 
 /// Places: finishers in order, then everyone else by distance raced.
@@ -874,8 +1076,6 @@ fn hud(w: &World) {
     let race = w.resource::<Race>().clone();
     let t = w.resource::<Track>();
     let name = track::layout(t.id).name.to_string();
-    // On dirt every corner is a slide: the badge would never go out.
-    let dirt = t.dirt;
     let order = standings(w);
     let radar = radar(w, &t, &order);
     drop(t);
@@ -962,7 +1162,7 @@ fn hud(w: &World) {
         speed: (speed * 3.6).round() as u32,
         gas: player.gas > 0.0,
         brake: player.brake,
-        sliding: player.sliding && !dirt,
+        air: player.air && player.air_ticks >= car::JUMP_TICKS,
         off: player.surface == car::GRASS,
         standings: rows,
         radar,

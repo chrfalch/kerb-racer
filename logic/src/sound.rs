@@ -391,11 +391,12 @@ pub fn tick(w: &mut World, now: u64, start: u64, volume: f32) {
         let mut engine = *w.require::<Engine>(*e);
         rev(&mut engine, car, racing, dt);
         let speed = Vec2::new(car.vx, car.vz).length();
-        // A knock: another car or the fence, light to heavy.
-        if car.knock > 1.8 && now - engine.last_hit > hz / 4 {
+        // A knock: another car, the fence, or coming down off a crest; light to heavy.
+        let knock = car.knock.max(car.landing * 1.5);
+        if knock > 1.8 && now - engine.last_hit > hz / 4 {
             engine.last_hit = now;
-            let take = ((car.knock - 1.8) / 2.0).clamp(0.0, 5.0) as u32;
-            let gain = (0.3 + car.knock / 10.0).min(1.0);
+            let take = ((knock - 1.8) / 2.0).clamp(0.0, 5.0) as u32;
+            let gain = (0.3 + knock / 10.0).min(1.0);
             let pitch = jitter(now, car.id, 0.08);
             w.play(&format!("hit-{take}"))
                 .at(*e)

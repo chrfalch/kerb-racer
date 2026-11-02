@@ -1,6 +1,6 @@
 //! Car dynamics, the automatic steering every car shares, and the rivals'
 //! pedals. All cars step together on plain copies so they can push each other.
-use crate::track::{Track, HALF, RUNOFF};
+use crate::track::{Track, G, HALF, RUNOFF};
 use exact_game::*;
 
 /// Engine thrust at rest (m/s²); it fades linearly to nothing at VMAX.
@@ -74,6 +74,25 @@ pub struct Car {
     pub knock: f32,
     /// Against the fence this tick.
     pub walled: bool,
+    /// Height of the car's base above the datum and its vertical speed.
+    pub y: f32,
+    pub vy: f32,
+    /// In the air: off a crest, nothing but gravity until it comes down.
+    pub air: bool,
+    /// Ticks since the wheels left the ground (0 on it).
+    pub air_ticks: u32,
+    /// How hard (m/s) it came down, on the tick it lands; 0 otherwise.
+    pub landing: f32,
+    /// Weight on the tyres: 1 on the level, less over a crest, more in a dip.
+    pub load: f32,
+    /// A hard landing unsettles the car: grip is down while this fades (0..1).
+    pub shaken: f32,
+    /// The body's tilt (nose up, and about its length), its suspension's
+    /// travel (m, negative is squashed) and that travel's speed.
+    pub pitch: f32,
+    pub lean: f32,
+    pub squash: f32,
+    pub squash_v: f32,
 }
 
 /// Wheel radius of every car (m).
@@ -83,6 +102,14 @@ pub const WHEELBASE: f32 = 1.85;
 /// How hard the brakes slow the wheels themselves (m/s² at the tread): far
 /// more than the road can slow the car, so a stamp on the pedal locks them.
 pub const WHEEL_BRAKE: f32 = 70.0;
+/// The road has to fall away this much faster (m/s) than gravity can pull
+/// the car down before its wheels leave the ground.
+pub const LIFT_OFF: f32 = 0.05;
+/// The most upward acceleration (m/s²) the ground can give the body; the
+/// suspension takes the rest.
+pub const SOAK: f32 = 40.0;
+/// Ticks in the air before it counts as a jump (for the HUD and the camera).
+pub const JUMP_TICKS: u32 = 12;
 
 /// Surfaces under a car.
 pub const ASPHALT: u32 = 0;
@@ -224,6 +251,8 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     body.car.knock = 0.0;
     body.car.walled = false;
     let speed = body.v().length();
+    let air = body.car.air;
+    let slope = track.gradient(body.p, body.car.idx as usize);
     // Steering: pure pursuit toward the aim point, limited by the wheels.
     let ahead = 4.5 + 0.32 * speed;
     let target = aim(track, &body.car, ahead) - body.p;
@@ -241,6 +270,10 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     let mut yaw = speed * curvature;
     let max_yaw = (speed / 4.0).min(3.6);
     yaw = yaw.clamp(-max_yaw, max_yaw);
+    // In the air the tyres have nothing to turn against.
+    if air {
+        yaw = 0.0;
+    }
     body.car.heading = wrap_angle(body.car.heading + yaw * dt);
     // The front wheels point along the arc the car is turning on.
     let steer = math::atan(WHEELBASE * yaw / speed.max(1.0)).clamp(-0.55, 0.55);
@@ -255,6 +288,8 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
         (true, RUNOFF_SURFACE) => GRIP_GRAVEL,
         (true, _) => GRIP_DIRT_GRASS,
     };
+    let grip = if track.wet { grip * crate::track::WET } else { grip };
+    let grip = grip * body.car.load.clamp(0.3, 1.5) * (1.0 - 0.55 * body.car.shaken);
     let (drift, brake, max_slip) = if track.dirt {
         (DRIFT_DIRT, BRAKE_DIRT, MAX_SLIP_DIRT)
     } else {
@@ -264,24 +299,34 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     let l = f.perp();
     let mut vf = body.v().dot(f);
     let mut vl = body.v().dot(l);
-    // Pedals.
-    if body.car.brake {
+    // Pedals; in the air the engine only revs and the brakes only stop the wheels.
+    if air {
+        // Only the air slows it.
+        vf -= 0.0012 * vf * vf * dt;
+    } else if body.car.brake {
         vf -= brake.min(vf.abs() / dt).copysign(vf) * dt;
     } else {
         let thrust = ENGINE * (1.0 - vf / TOP).max(0.0) * body.car.gas;
         let coast = COAST * (1.0 - body.car.gas);
         vf += (thrust - ROLL - coast - 0.0012 * vf * vf) * dt;
     }
-    match surface {
-        RUNOFF_SURFACE => vf -= 0.35 * vf * dt,
-        GRASS => vf -= 1.3 * vf * dt,
-        _ => {}
+    if !air {
+        match surface {
+            RUNOFF_SURFACE => vf -= 0.35 * vf * dt,
+            GRASS => vf -= 1.3 * vf * dt,
+            _ => {}
+        }
+        // Gravity along the ground: hills slow the climb and speed the descent,
+        // and a banked or sloping road pulls the car down its fall line.
+        let norm = math::sqrt(1.0 + slope.length_squared());
+        vf -= G * slope.dot(f) / norm * dt;
+        vl -= G * slope.dot(l) / norm * dt;
     }
     vf = vf.max(0.0);
     // Tyres pull the sideways velocity out, gently while it is small (the
     // drift) and up to their grip when it is large; past that, slide.
-    let pull = (vl.abs() * drift).min(grip) * dt;
-    body.car.sliding = vl.abs() > SLIDE;
+    let pull = if air { 0.0 } else { (vl.abs() * drift).min(grip) * dt };
+    body.car.sliding = !air && vl.abs() > SLIDE;
     if body.car.sliding {
         // A sliding tyre scrubs speed.
         vf -= ((vl.abs() - SLIDE) * 0.35 * dt).min(vf);
@@ -290,7 +335,7 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     let v = f * vf + l * vl;
     body.set_v(v);
     // The nose cannot point too far from where the car is going.
-    if v.length() > 1.0 {
+    if !air && v.length() > 1.0 {
         let travel = math::atan2(v.y, v.x);
         let slip = wrap_angle(body.car.heading - travel);
         if slip.abs() > max_slip {
@@ -298,9 +343,89 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
         }
     }
     body.p += v * dt;
-    wheels(&mut body.car, vf, dt);
+    if air {
+        // Nothing for the tyres to roll on: they keep turning as they were.
+        let spin = body.car.roll / WHEEL_R * dt;
+        body.car.spin = wrap_angle(body.car.spin + spin);
+    } else {
+        wheels(&mut body.car, vf, dt);
+    }
     locate(track, body);
     fence(track, body);
+    vertical(track, body, slope, dt);
+}
+
+/// Up and down: follow the ground while gravity can keep the car on it, fly
+/// when the road falls away faster than that (over a sharp enough crest at
+/// speed), and come down again with a thump that costs speed and grip.
+fn vertical(track: &Track, body: &mut Body, slope: Vec2, dt: f32) {
+    let ground = track.surface(body.p, body.car.idx as usize);
+    let v = body.v();
+    let car = &mut body.car;
+    car.landing = 0.0;
+    if !car.air {
+        let follow = (ground - car.y) / dt;
+        let fall = car.vy - G * dt;
+        if follow < fall - LIFT_OFF && v.length() > 4.0 {
+            car.air = true;
+            car.air_ticks = 1;
+            car.vy = fall;
+            car.y += car.vy * dt;
+        } else {
+            // What it takes to stay on the road is the weight on the tyres.
+            let lift = (follow - car.vy) / dt;
+            let load = ((G + lift) / G).clamp(0.3, 1.6);
+            car.load += (load - car.load) * (dt * 14.0).min(1.0);
+            // The suspension soaks up a sudden ramp (a bank, a kerb of land):
+            // the body only gains upward speed so fast, so it isn't flung.
+            car.vy = follow.min(car.vy + SOAK * dt);
+            car.y = ground;
+        }
+    } else {
+        car.vy -= G * dt;
+        car.y += car.vy * dt;
+        car.air_ticks += 1;
+        if car.y <= ground {
+            // How fast it meets the ground, which may itself be falling away.
+            let under = slope.dot(v);
+            let impact = (under - car.vy).max(0.0);
+            car.y = ground;
+            car.vy = under;
+            car.air = false;
+            car.air_ticks = 0;
+            car.landing = impact.max(0.01);
+            car.load = 1.0;
+            // Loose ground and grass give way: a rougher landing.
+            let rough = if track.dirt || car.surface != ASPHALT { 1.5 } else { 1.0 };
+            let scrub = ((0.015 + 0.02 * impact) * rough).min(0.3);
+            car.vx *= 1.0 - scrub;
+            car.vz *= 1.0 - scrub;
+            car.shaken = car.shaken.max((impact * rough / 7.0).min(1.0));
+            car.squash_v -= impact * 0.4;
+        }
+    }
+    car.shaken = (car.shaken - dt * 1.6).max(0.0);
+    pose(car, slope, dt);
+}
+
+/// The body's tilt and suspension, for drawing: lie along the ground, lift
+/// the nose a little with the flight path, squash on landings.
+fn pose(car: &mut Car, slope: Vec2, dt: f32) {
+    let (s, c) = math::sin_cos(car.heading);
+    let (f, l) = (Vec2::new(c, s), Vec2::new(-s, c));
+    let speed = Vec2::new(car.vx, car.vz).length();
+    let (pitch, lean, rate) = if car.air {
+        (math::atan(car.vy / speed.max(4.0)) * 0.5, 0.0, 3.0)
+    } else {
+        (math::atan(slope.dot(f)), -math::atan(slope.dot(l)), 14.0)
+    };
+    let k = (dt * rate).min(1.0);
+    car.pitch += (pitch - car.pitch) * k;
+    car.lean += (lean - car.lean) * k;
+    // A spring settling where the load puts it.
+    let rest = -(car.load - 1.0) * 0.06;
+    car.squash_v += (-180.0 * (car.squash - rest) - 13.0 * car.squash_v) * dt;
+    car.squash = (car.squash + car.squash_v * dt).clamp(-0.2, 0.12);
 }
 
 /// Update the car's nearest sample, offset and surface, and count crossings.
@@ -337,7 +462,7 @@ fn fence(track: &Track, body: &mut Body) {
         return;
     }
     let out = track.normal(i) * side.signum();
-    body.p -= out * (side.abs() - limit);
+    shove(track, body, -out * (side.abs() - limit));
     body.car.side = limit.copysign(side);
     body.car.walled = true;
     let v = body.v();
@@ -348,10 +473,26 @@ fn fence(track: &Track, body: &mut Body) {
     }
 }
 
+/// Move a car without it travelling there: a fence or another car pushing it
+/// aside. On the ground it stays on the ground, rather than the step up or
+/// down reading as a ramp it drove over at speed.
+fn shove(track: &Track, body: &mut Body, by: Vec2) {
+    let i = body.car.idx as usize;
+    let before = track.height(body.p, i);
+    body.p += by;
+    if !body.car.air {
+        body.car.y += track.height(body.p, i) - before;
+    }
+}
+
 /// Push overlapping cars apart and trade the closing speed between them.
-pub fn collide(bodies: &mut [Body]) {
+pub fn collide(track: &Track, bodies: &mut [Body]) {
     for a in 0..bodies.len() {
         for b in a + 1..bodies.len() {
+            // A car in the air sails over one on the ground.
+            if (bodies[a].car.y - bodies[b].car.y).abs() > 0.9 {
+                continue;
+            }
             for sa in [-1.0f32, 1.0] {
                 for sb in [-1.0f32, 1.0] {
                     let pa = bodies[a].p + bodies[a].forward() * BODY_OFFSET * sa;
@@ -363,8 +504,8 @@ pub fn collide(bodies: &mut [Body]) {
                     }
                     let n = d / dist;
                     let overlap = 2.0 * BODY_R - dist;
-                    bodies[a].p -= n * overlap * 0.5;
-                    bodies[b].p += n * overlap * 0.5;
+                    shove(track, &mut bodies[a], -n * overlap * 0.5);
+                    shove(track, &mut bodies[b], n * overlap * 0.5);
                     let closing = (bodies[b].v() - bodies[a].v()).dot(n);
                     if closing < 0.0 {
                         for k in [a, b] {
