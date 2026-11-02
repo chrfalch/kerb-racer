@@ -53,6 +53,17 @@ EXACT_IDENTITY=<sha1> EXACT_PROFILE=<path.mobileprovision> \
 `--unsigned` doesn't work for this game. It has GPU modules, and re-signing the
 app would invalidate their baked digests.
 
+## Sound
+
+Engines, tyres, kerbs and knocks are recordings from infinite-driver's sample
+banks; `python3 art/src/sounds.py` re-pitches its V8 loops onto a close rpm grid
+and writes `art/sounds/*.wav`. The race music, the countdown, lap and flag
+stings and the menu theme (`assets/music/menu.m4a`) are composed and rendered
+by `python3 art/src/music.py`. `logic/src/sound.rs` drives them: a gearbox
+turns road speed into rpm and each engine crossfades the two nearest loops. The
+speaker button mutes everything (remembered); on iOS the ring/silent switch
+mutes it too, since the app keeps Exact's default `ambient` audio session.
+
 ## Proofs
 
 `bun proof.mjs` verifies gameplay, Contract text/accessibility and saves on the GPU-less Linux host. `bun proof.mjs web` adds pixels. First run `bun '../exact2/game/prove.mjs' .` to fill empty pins after every mode and host agrees; accept later intentional changes with `--repin`.
