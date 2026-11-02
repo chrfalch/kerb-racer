@@ -3,6 +3,7 @@
 //! racing line, and the tyres decide whether it makes the corner.
 pub mod car;
 pub mod scenery;
+pub mod sound;
 pub mod track;
 
 use car::{Body, Car};
@@ -19,6 +20,9 @@ pub struct Options {
     pub quality: u32,
     #[live]
     pub paused: bool,
+    /// Master volume, 0 (muted) to 1.
+    #[live]
+    pub volume: f32,
     #[restart]
     pub restart: bool,
 }
@@ -30,6 +34,7 @@ impl Default for Options {
             laps: 3,
             quality: 1,
             paused: false,
+            volume: 1.0,
             restart: false,
         }
     }
@@ -211,50 +216,66 @@ fn wheel_layout(id: u32) -> (f32, f32, f32, &'static str) {
     }
 }
 
+/// The Blender models and ground textures, then the sounds (`sound::ASSETS`).
+const MODELS: [&str; 35] = [
+    "car-0.model",
+    "car-1.model",
+    "car-2.model",
+    "car-3.model",
+    "car-4.model",
+    "car-5.model",
+    "pine-a.model",
+    "pine-b.model",
+    "pine-c.model",
+    "tree-a.model",
+    "bush.model",
+    "fern.model",
+    "daisies.model",
+    "mushrooms.model",
+    "logs.model",
+    "stump.model",
+    "rock.model",
+    "wheel-disc-l.model",
+    "wheel-disc-r.model",
+    "wheel-fuchs-l.model",
+    "wheel-fuchs-r.model",
+    "fence.model",
+    "barrier.model",
+    "poppies.model",
+    "asphalt.tex",
+    "grass.tex",
+    "clay.tex",
+    "dirt.tex",
+    "gravel.tex",
+    "scree.tex",
+    "blob.tex",
+    "shade-0.tex",
+    "shade-1.tex",
+    "shade-2.tex",
+    "shade-3.tex",
+];
+const ASSETS: [&str; MODELS.len() + sound::ASSETS.len()] = {
+    let mut all = [""; MODELS.len() + sound::ASSETS.len()];
+    let mut i = 0;
+    while i < all.len() {
+        all[i] = if i < MODELS.len() {
+            MODELS[i]
+        } else {
+            sound::ASSETS[i - MODELS.len()]
+        };
+        i += 1;
+    }
+    all
+};
+
 pub struct KerbRacers;
 impl Game for KerbRacers {
     const ID: &'static str = "kerb-racers";
     const HZ: u32 = 120;
-    /// The Blender models and ground textures. Setup waits for them, so the race
-    /// (and its countdown) only begins once the whole track can be drawn; the
-    /// loading screen in app.contract covers the wait.
-    const ASSETS: &'static [&'static str] = &[
-        "car-0.model",
-        "car-1.model",
-        "car-2.model",
-        "car-3.model",
-        "car-4.model",
-        "car-5.model",
-        "pine-a.model",
-        "pine-b.model",
-        "pine-c.model",
-        "tree-a.model",
-        "bush.model",
-        "fern.model",
-        "daisies.model",
-        "mushrooms.model",
-        "logs.model",
-        "stump.model",
-        "rock.model",
-        "wheel-disc-l.model",
-        "wheel-disc-r.model",
-        "wheel-fuchs-l.model",
-        "wheel-fuchs-r.model",
-        "fence.model",
-        "barrier.model",
-        "poppies.model",
-        "asphalt.tex",
-        "grass.tex",
-        "clay.tex",
-        "dirt.tex",
-        "gravel.tex",
-        "scree.tex",
-        "blob.tex",
-        "shade-0.tex",
-        "shade-1.tex",
-        "shade-2.tex",
-        "shade-3.tex",
-    ];
+    /// The models, textures and sounds. Setup waits for them, so the race
+    /// (and its countdown) only begins once the whole track can be drawn and
+    /// heard; the loading screen in app.contract covers the wait.
+    const ASSETS: &'static [&'static str] = &ASSETS;
     type Args = Options;
     fn actions() -> Actions {
         Actions::new()
@@ -266,6 +287,9 @@ impl Game for KerbRacers {
     fn validate(args: &Options) -> Result<(), String> {
         if args.quality > 2 {
             return Err(format!("quality is 0, 1 or 2, not {}", args.quality));
+        }
+        if !(0.0..=1.0).contains(&args.volume) {
+            return Err(format!("volume is 0 to 1, not {}", args.volume));
         }
         if args.laps == 0 || args.laps > 20 {
             return Err(format!("laps must be 1 to 20, not {}", args.laps));
@@ -328,6 +352,7 @@ impl Game for KerbRacers {
         let blob = w
             .generated_model("blob.model", scenery::blob())
             .expect("blob");
+        let mut cars = Vec::new();
         for (k, d) in DRIVERS.iter().enumerate() {
             let k = k as u32;
             let row = k / 2;
@@ -361,6 +386,7 @@ impl Game for KerbRacers {
                     },
                 ),
             );
+            cars.push((k, e));
             puffs(w, e, &name_of(k), t.dirt, t.wet);
             if t.wet {
                 headlights(w, e);
@@ -405,6 +431,7 @@ impl Game for KerbRacers {
                 );
             }
         }
+        sound::setup(w, &cars, t.dirt);
         let start = t.at(t.wrap(-12), 0.0);
         let focus_y = t.surface(start, t.wrap(-12));
         w.insert_resource(Race {
@@ -472,7 +499,7 @@ impl Game for KerbRacers {
             p.insert(e, Opacity(0.28));
         }
     }
-    fn tick(w: &mut World, input: &Input, _: &Options) {
+    fn tick(w: &mut World, input: &Input, args: &Options) {
         let now = w.tick();
         let (start, laps) = {
             let r = w.resource::<Race>();
@@ -485,6 +512,7 @@ impl Game for KerbRacers {
             player.gas = if input.held("gas") { 1.0 } else { 0.0 };
             player.brake = input.held("brake");
         }
+        sound::tick(w, now, start, args.volume);
         camera(w, false);
         settle_board(w);
         hud(w);
