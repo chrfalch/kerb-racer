@@ -36,9 +36,12 @@ shape Hud
   gas: bool
   brake: bool
   air: bool
+  draft: bool
   off: bool
   standings: Row[]
   radar: Radar
+
+fn assistName(n: number): string = n == 0 ? "Off" : n == 1 ? "Braking line" : "Line + auto-lift"
 
 fn trackName(n: number): string = n == 0 ? "Pine Hollow" : n == 1 ? "Fern Loop" : n == 2 ? "Kerb Ring" : n == 3 ? "Gravel Pit" : "Misty Moor"
 
@@ -147,6 +150,7 @@ keyframes light4
 component KerbRacers
   state playing = false
   state track = 0
+  state assist = 1
   state again = false
   state paused = false
   state hint = 0
@@ -155,6 +159,9 @@ component KerbRacers
 
   action pick(n: number)
     track = n
+
+  action help(n: number)
+    assist = n
 
   action play
     paused = false
@@ -185,7 +192,7 @@ component KerbRacers
   view
     main viewport-fit="cover" width="100%" height="100%" background-color="#1d2b1a" color="#fbf6e9" font-family="system-ui"
       if playing
-        canvas surface=world(seed=7, track=track, laps=3, quality=1, paused=(paused or (not started and hud.phase != "race" and hud.phase != "done")), restart=again) testId="world" width="100%" height="100%" position="relative" user-select="none"
+        canvas surface=world(seed=7, track=track, laps=3, quality=1, assist=assist, paused=(paused or (not started and hud.phase != "race" and hud.phase != "done")), restart=again) testId="world" width="100%" height="100%" position="relative" user-select="none"
           row testId="hud-top" position="absolute" top="calc(env(safe-area-inset-top) + 16px)" left="calc(env(safe-area-inset-left) + 16px)" gap=10 pointer-events="none"
             column padding=12 border-radius=14 background-color="#14201bcc" align-items="center" min-width=74
               text "POS" font-size=11 font-weight=700 letter-spacing=2 color="#c9d6b8"
@@ -213,6 +220,8 @@ component KerbRacers
           column position="absolute" left=0 right=0 bottom="calc(env(safe-area-inset-bottom) + 6px)" align-items="center" gap=8 pointer-events="none"
             if hud.air
               text "AIR" testId="air" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#3fa7d6e6"
+            else if hud.draft
+              text "DRAFT" testId="draft" padding=8 border-radius=10 font-weight=900 letter-spacing=2 color="#22252b" background-color="#e8eef2e6"
             else if hud.off
               text "OFF TRACK" testId="off-track" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#a4472fe6"
             row gap=14 align-items="flex-end"
@@ -297,12 +306,14 @@ component KerbRacers
                   Pedal(right=false)
                   Pedal(right=true)
                 text "Steering is automatic. Too fast into a corner and you'll slide off." font-size=14 color="#fbf6e9" text-align="center" padding-top=6 padding-bottom=6 padding-left=12 padding-right=12 border-radius=10 background-color="#14201bb3"
+                text "A / D: pass on the left or right · Follow close behind to slipstream" font-size=13 color="#c9d6b8" text-align="center"
           if hud.phase == "grid" and started
             column testId="countdown" position="absolute" top="calc(env(safe-area-inset-top) + 24px)" left="env(safe-area-inset-left)" right="env(safe-area-inset-right)" align-items="center" gap=8 pointer-events="none"
               text `${hud.count}` font-size=84 font-weight=900 color="#fbf6e9"
               text hud.track font-size=20 font-weight=700 color="#f2c230"
               text "Right click: gas · Left click: brake" padding=10 border-radius=12 background-color="#14201bcc"
               text "Steering is automatic. Too fast into a corner and you'll slide off." font-size=14 color="#c9d6b8"
+              text "A / D or a sideways drag: choose the side to pass on" font-size=13 color="#c9d6b8"
           if hud.go
             column testId="go" position="absolute" top="calc(env(safe-area-inset-top) + 24px)" left="env(safe-area-inset-left)" right="env(safe-area-inset-right)" align-items="center" pointer-events="none"
               text "GO!" font-size=84 font-weight=900 color="#3fae5a"
@@ -373,7 +384,13 @@ component KerbRacers
                 Pedal(right=true)
               column align-items="center" gap=3 padding-top=6 padding-bottom=6 padding-left=12 padding-right=12 border-radius=10 background-color="#14201bb3"
                 text "Steering is automatic. Full speed into a corner and you will slide off." font-size=13 color="#fbf6e9" text-align="center"
-                text "On touch: right half is gas, left half is brake." font-size=11 color="#c9d6b8" text-align="center"
+                text "On touch: right half is gas, left half is brake. Drag sideways to pick a side to pass." font-size=11 color="#c9d6b8" text-align="center"
+                text "Keys: A / D pass left or right. Tuck in behind a car to slipstream it." font-size=11 color="#c9d6b8" text-align="center"
+              row gap=8 align-items="center" padding=6 border-radius=12 background-color="#14201bcc"
+                text "ASSIST" font-size=11 font-weight=900 letter-spacing=2 color="#c9d6b8" padding-left=6
+                for n in [0, 1, 2] key=n
+                  button press=help(n) testId=`assist-${n}` aria-label=assistName(n) aria-pressed=(assist == n) padding-top=6 padding-bottom=6 padding-left=12 padding-right=12 border-radius=9 background-color=(assist == n ? "#f2c230" : "#33402f")
+                    text assistName(n) font-size=13 font-weight=800 color=(assist == n ? "#22252b" : "#fbf6e9")
 
 // The menu's and loading screen's backdrop: a circuit seen from above with six cars lapping it.
 component RaceScene

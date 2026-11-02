@@ -9,6 +9,11 @@ pub const HALF: f32 = 4.6;
 pub const RUNOFF: f32 = 1.6;
 /// Fence distance from the centreline where nothing else is near.
 pub const WALL: f32 = HALF + 5.4;
+/// How close to the asphalt's edge the racing line runs: near enough that the
+/// outside wheels ride up on the kerbs at the apexes and exits.
+pub const LINE_EDGE: f32 = HALF - 1.0;
+/// The outer edge of the kerb's raised top, inward from the asphalt edge (m).
+pub const KERB_IN: f32 = 0.15;
 /// Lateral grip the planner assumes on asphalt (m/s²); the cars have a little more.
 pub const PLAN_GRIP: f32 = 14.5;
 /// Deceleration the planner allows itself when braking for a corner.
@@ -47,7 +52,7 @@ pub enum Lift {
     /// A run of bumps `wave` metres apart and `h` high, easing in and out.
     Whoops { at: f32, len: f32, wave: f32, h: f32 },
     /// Banking into the corner (`slope` > 0, rise per metre toward the outside)
-    /// or off-camber (< 0), easing in and out over the first and last quarter.
+    /// or off-camber (< 0), easing in and out over the first and last third.
     Bank { at: f32, len: f32, slope: f32 },
 }
 
@@ -277,6 +282,11 @@ pub struct Track {
     pub vbend: Vec<f32>,
     /// Cross-slope: height gained per metre to the left.
     pub bank: Vec<f32>,
+    /// Kerbs line both edges here (asphalt tracks' real corners only).
+    pub kerb: Vec<bool>,
+    /// How far from the centreline a car may be steered here: out to the
+    /// kerbs, or less across a banked stretch (see `LINE_EDGE`).
+    pub edge: Vec<f32>,
     /// How far to the left and to the right the road's own plane reaches: on
     /// the inside of a hairpin tighter than `BAND` the sample frames cross over
     /// each other, so past this the land (smooth there) carries the road.
@@ -314,6 +324,20 @@ impl Track {
     /// The point `offset` metres left of the centreline at `i`.
     pub fn at(&self, i: usize, offset: f32) -> Vec2 {
         self.centre(i) + self.normal(i) * offset
+    }
+    /// Which way the road turns over the next stretch, 12 to 40 m ahead of `i`:
+    /// 1 for a left-hander, -1 for a right, 0 when it runs on fairly straight.
+    /// The inside of that corner is the side to pass on and to defend.
+    pub fn turn_ahead(&self, i: usize) -> f32 {
+        let (from, to) = ((12.0 / self.step) as i64, (40.0 / self.step) as i64);
+        let angle: f32 = (from..to)
+            .map(|k| self.bend[self.wrap(i as i64 + k)] * self.step)
+            .sum();
+        if angle.abs() > 0.35 {
+            angle.signum()
+        } else {
+            0.0
+        }
     }
     /// The nearest sample within `reach` samples of `hint`, and the signed lateral offset there.
     pub fn locate(&self, p: Vec2, hint: usize, reach: i64) -> (usize, f32) {
@@ -514,7 +538,7 @@ fn lift_bank(lifts: &[Lift], s: f32) -> f32 {
         if let Lift::Bank { at, len, slope } = *lift {
             if s >= at && s <= at + len {
                 let u = (s - at) / len;
-                bank += slope * ease(u * 4.0) * ease((1.0 - u) * 4.0);
+                bank += slope * ease(u * 3.0) * ease((1.0 - u) * 3.0);
             }
         }
     }
@@ -678,7 +702,17 @@ pub fn build(id: u32) -> Track {
 
     // Racing line: relax each point toward the midpoint of its neighbours,
     // projected on its normal and clamped inside the kerbs.
-    let limit = HALF - 1.3;
+    // Out to the kerbs, but not across a banked or off-camber stretch, whose
+    // edges rise and fall too sharply to take at speed.
+    let edge: Vec<f32> = (0..n)
+        .map(|i| {
+            if lift_bank(layout(id).lifts, i as f32 * step) != 0.0 {
+                HALF - 1.3
+            } else {
+                LINE_EDGE
+            }
+        })
+        .collect();
     let mut line = vec![0f32; n];
     for pass in 0..900 {
         let reach = if pass < 600 { 6 } else { 2 };
@@ -687,6 +721,7 @@ pub fn build(id: u32) -> Track {
             let (a, b) = (p((i + n - reach) % n, &line), p((i + reach) % n, &line));
             let here = p(i, &line);
             let target = (a + b) * 0.5;
+            let limit = edge[i];
             line[i] = (line[i] + (target - here).dot(normals[i]) * 0.5).clamp(-limit, limit);
         }
     }
@@ -736,6 +771,11 @@ pub fn build(id: u32) -> Track {
         })
         .collect();
 
+    // Kerbs on both sides of every real corner; a dirt road has none.
+    let kerb: Vec<bool> = (0..n)
+        .map(|i| !dirt && (0..9).any(|k| bend[(i + n + k - 4) % n].abs() > 1.0 / 24.0))
+        .collect();
+
     // The inside of a corner is only the road's own plane short of where the
     // normals of the samples round it meet (the corner's tightest radius).
     // Left turns bend positive, so their inside is the left.
@@ -758,12 +798,21 @@ pub fn build(id: u32) -> Track {
     } else {
         1.0
     };
+    // The road's vertical curvature where the racing line runs: the
+    // centreline's, plus what a bank easing in or out adds out at the line's
+    // offset (an off-camber edge rising into a corner is a crest of its own).
+    let lifted: Vec<f32> = (0..n)
+        .map(|i| {
+            let (a, b) = ((i + n - 1) % n, (i + 1) % n);
+            vbend[i] + (bank[b] - 2.0 * bank[i] + bank[a]) / (step * step) * line[i]
+        })
+        .collect();
     // Over a crest the tyres go light and grip less; in a dip they bite harder.
     let mut speed: Vec<f32> = (0..n)
         .map(|i| {
             let r = radius(path[(i + n - 5) % n], path[i], path[(i + 5) % n]).abs();
             let grip = PLAN_GRIP * feel * r;
-            let vb = (0..5).map(|k| vbend[(i + n + k - 2) % n]).sum::<f32>() / 5.0;
+            let vb = (0..5).map(|k| lifted[(i + n + k - 2) % n]).sum::<f32>() / 5.0;
             // (Only where the corner needs the grip: flat out over a crest on
             // a straight just flies, which the jump check below allows for.)
             let denom = if r > 120.0 { 1.0 } else { 1.0 - grip * vb / G };
@@ -775,10 +824,10 @@ pub fn build(id: u32) -> Track {
     let lookahead = (30.0 / step) as usize;
     let corners = speed.clone();
     for i in 0..n {
-        if vbend[i] >= -1e-4 {
+        if lifted[i] >= -1e-4 {
             continue;
         }
-        let takeoff = math::sqrt(G / -vbend[i]);
+        let takeoff = math::sqrt(G / -lifted[i]);
         let ahead = (1..lookahead)
             .map(|k| corners[(i + k) % n])
             .fold(f32::MAX, f32::min);
@@ -836,6 +885,8 @@ pub fn build(id: u32) -> Track {
         grade,
         vbend,
         bank,
+        kerb,
+        edge,
         reach_left,
         reach_right,
         ..Track::default()

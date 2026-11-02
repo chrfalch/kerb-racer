@@ -1,8 +1,11 @@
 //! Kerb Racers: a short top-down circuit race. You hold the pedals (right
 //! click for gas, left click to brake); the car steers itself along the
-//! racing line, and the tyres decide whether it makes the corner.
+//! racing line, and the tyres decide whether it makes the corner. A or D (or
+//! a thumb dragged sideways) picks the side to pass on.
 pub mod car;
+pub mod fx;
 pub mod scenery;
+pub mod sound;
 pub mod track;
 
 use car::{Body, Car};
@@ -17,6 +20,9 @@ pub struct Options {
     pub laps: u32,
     /// Graphics: 0 low (no undergrowth), 1 medium (baked shadows, the default), 2 high (real-time sun shadows, haze and bloom).
     pub quality: u32,
+    /// Driving help: 0 none, 1 the braking guide on the road (the default),
+    /// 2 the guide and a throttle that lifts by itself before a corner.
+    pub assist: u32,
     #[live]
     pub paused: bool,
     #[restart]
@@ -29,6 +35,7 @@ impl Default for Options {
             track: 0,
             laps: 3,
             quality: 1,
+            assist: 1,
             paused: false,
             restart: false,
         }
@@ -50,6 +57,12 @@ pub struct Driver {
     pub paint: u32,
     pub trim: u32,
     pub skill: f32,
+    /// How late it brakes and how small a gap it goes for (0..1).
+    pub aggression: f32,
+    /// How rarely it overcooks a corner (0..1).
+    pub consistency: f32,
+    /// How hard it covers the inside against a car behind (0..1).
+    pub defence: f32,
 }
 
 /// Grid order, front to back. The player starts fifth.
@@ -59,36 +72,54 @@ pub const DRIVERS: [Driver; 6] = [
         paint: 0x2a2c33,
         trim: 0xf2c230,
         skill: 0.925,
+        aggression: 0.6,
+        consistency: 0.96,
+        defence: 0.8,
     },
     Driver {
         name: "Mika",
         paint: 0x8b4fd8,
         trim: 0xf1efe8,
         skill: 0.915,
+        aggression: 0.85,
+        consistency: 0.88,
+        defence: 0.5,
     },
     Driver {
         name: "Rook",
         paint: 0xf1efe8,
         trim: 0xe8742a,
         skill: 0.9,
+        aggression: 0.4,
+        consistency: 0.94,
+        defence: 0.95,
     },
     Driver {
         name: "Ayla",
         paint: 0x3fa7d6,
         trim: 0xf1efe8,
         skill: 0.885,
+        aggression: 0.7,
+        consistency: 0.9,
+        defence: 0.6,
     },
     Driver {
         name: "You",
         paint: 0xf2c230,
         trim: 0x22252b,
         skill: 0.9,
+        aggression: 0.5,
+        consistency: 1.0,
+        defence: 0.0,
     },
     Driver {
         name: "Vex",
         paint: 0xf1efe8,
         trim: 0xd83a2e,
         skill: 0.87,
+        aggression: 0.95,
+        consistency: 0.85,
+        defence: 0.3,
     },
 ];
 pub const PLAYER: u32 = 4;
@@ -109,6 +140,10 @@ pub struct Race {
     pub focus_y: f32,
     /// The camera's shake after the player lands hard (m), dying away.
     pub shake: f32,
+    /// The camera's height above the focus, eased with speed.
+    pub lift: f32,
+    /// Driving help (see `Options::assist`).
+    pub assist: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Data)]
@@ -169,6 +204,8 @@ pub struct Hud {
     pub brake: bool,
     /// The player's car is in the air off a jump.
     pub air: bool,
+    /// The player's car is in another's slipstream.
+    pub draft: bool,
     pub off: bool,
     pub standings: Vec<Row>,
     pub radar: Radar,
@@ -262,10 +299,19 @@ impl Game for KerbRacers {
             .button_touch("gas", Region::Right)
             .button("brake", &["MouseLeft", "ArrowDown", "KeyS", "Space"])
             .button_touch("brake", Region::Left)
+            // The side to pass on, from the driver's seat: A or ← for the
+            // left, D or → for the right; on touch, drag the thumb that
+            // holds a pedal toward the side on screen.
+            .button("left", &["KeyA", "ArrowLeft"])
+            .button("right", &["KeyD", "ArrowRight"])
+            .stick("swipe", Stick::touch(Region::All))
     }
     fn validate(args: &Options) -> Result<(), String> {
         if args.quality > 2 {
             return Err(format!("quality is 0, 1 or 2, not {}", args.quality));
+        }
+        if args.assist > 2 {
+            return Err(format!("assist is 0, 1 or 2, not {}", args.assist));
         }
         if args.laps == 0 || args.laps > 20 {
             return Err(format!("laps must be 1 to 20, not {}", args.laps));
@@ -352,6 +398,10 @@ impl Game for KerbRacers {
                         id: k,
                         ai: k != PLAYER,
                         skill: d.skill,
+                        aggression: d.aggression,
+                        consistency: d.consistency,
+                        defence: d.defence,
+                        pace: 1.0,
                         heading,
                         idx: idx as u32,
                         side,
@@ -362,6 +412,7 @@ impl Game for KerbRacers {
                 ),
             );
             puffs(w, e, &name_of(k), t.dirt, t.wet);
+            fx::setup_car(w, e, &name_of(k), k);
             if t.wet {
                 headlights(w, e);
             }
@@ -416,6 +467,8 @@ impl Game for KerbRacers {
             focus_z: start.y,
             focus_y,
             shake: 0.0,
+            lift: 30.0,
+            assist: args.assist,
         });
         if t.wet {
             rain(w);
@@ -431,6 +484,8 @@ impl Game for KerbRacers {
                 },
             ),
         );
+        fx::setup(w, args.assist);
+        sound::setup(w);
         camera(w, true);
         hud(w);
     }
@@ -478,13 +533,18 @@ impl Game for KerbRacers {
             let r = w.resource::<Race>();
             (r.start, r.laps)
         };
+        sound::lights(w, now, start);
         if now >= start {
             race(w, input, now, start, laps);
         } else {
+            let dt = w.dt();
             let mut player = w.require_mut::<Car>("player");
-            player.gas = if input.held("gas") { 1.0 } else { 0.0 };
+            player.gas = throttle(player.gas, input.held("gas"), dt);
             player.brake = input.held("brake");
         }
+        let nearest = nearest_rival(w);
+        let loose = w.resource::<Track>().dirt;
+        sound::step(w, nearest, loose);
         camera(w, false);
         settle_board(w);
         hud(w);
@@ -509,21 +569,46 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
         .collect();
     cars.sort_by_key(|(_, b)| b.car.id);
     let (entities, mut list): (Vec<Entity>, Vec<Body>) = cars.into_iter().unzip();
+    for body in list.iter_mut() {
+        body.car.bump = 0.0;
+    }
+    let assist = w.resource::<Race>().assist;
+    if let Some(player) = list.iter_mut().find(|b| b.car.id == PLAYER) {
+        steer_input(&t, player, input);
+    }
     let caps = car::plan(&t, &mut list, dt);
+    // Rivals keep in touch: a little quicker while behind the player, a
+    // little easier while ahead, at most 3% either way.
+    let player_progress = list
+        .iter()
+        .find(|b| b.car.id == PLAYER)
+        .map(|b| (b.progress(&t), b.car.finished));
     for (k, body) in list.iter_mut().enumerate() {
         if body.car.ai || body.car.finished {
             if !body.car.ai {
                 // The player's car cruises home once the flag has fallen.
                 body.car.skill = 0.85;
+                body.car.pace = 1.0;
+            } else {
+                body.car.pace = match player_progress {
+                    Some((p, false)) => 1.0 + ((p - body.progress(&t)) / 60.0).clamp(-1.0, 1.0) * 0.03,
+                    _ => 1.0,
+                };
+                // Bolder drivers carry a little more into the corners.
+                body.car.pace *= 1.0 + 0.012 * (body.car.aggression - 0.5);
+                car::blunder(&t, &mut body.car);
             }
             car::drive(&t, body, caps[k]);
         } else {
             body.car.brake = input.held("brake");
-            body.car.gas = if input.held("gas") && !body.car.brake {
-                1.0
-            } else {
+            body.car.gas = if body.car.brake {
                 0.0
+            } else {
+                throttle(body.car.gas, input.held("gas"), dt)
             };
+            if assist >= 2 {
+                lift_for_corners(&t, body);
+            }
         }
         if now == start {
             body.car.lap_tick = start;
@@ -561,10 +646,25 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
         let mut race = w.resource_mut::<Race>();
         race.shake = race.shake.max((shake * 0.045).min(0.32));
     }
+    // A buzz through the view while the player rides a kerb, a jolt on a bump.
+    if let Some(p) = list.iter().find(|b| b.car.id == PLAYER) {
+        let speed = p.v().length();
+        let kerb: f32 = if p.car.kerb && speed > 6.0 { 0.035 } else { 0.0 };
+        let bump = if p.car.bump > 2.0 { (p.car.bump * 0.02).min(0.2) } else { 0.0 };
+        if kerb > 0.0 || bump > 0.0 {
+            let mut race = w.resource_mut::<Race>();
+            race.shake = race.shake.max(kerb.max(bump));
+        }
+    }
     for body in list.iter_mut() {
         car::locate(&t, body);
     }
-    for (e, body) in entities.iter().zip(list) {
+    for (e, mut body) in entities.iter().zip(list) {
+        let name = name_of(body.car.id);
+        fx::car(w, &t, &mut body, &name, dt);
+        if body.car.id == PLAYER {
+            fx::player(w, &t, &body, assist);
+        }
         let car = &body.car;
         let mut pose = w.require_mut::<Transform>(*e);
         pose.position = Vec3::new(body.p.x, car.y + car.squash, body.p.y);
@@ -573,7 +673,6 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
             * Quat::from_rotation_x(car.lean);
         drop(pose);
         let speed = Vec2::new(car.vx, car.vz).length();
-        let name = name_of(car.id);
         // The shadow lies on the ground below: in the air it slides away from
         // the low sun, shrinks and fades, which is how a jump reads from above.
         let idx = car.idx as usize;
@@ -609,6 +708,71 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
         }
         *w.require_mut::<Car>(*e) = body.car;
     }
+}
+
+/// The gas pedal under a finger or a key: held, it comes in quickly from a
+/// little over half throttle to full, so a quick dab only feathers it.
+fn throttle(gas: f32, held: bool, dt: f32) -> f32 {
+    if held {
+        (gas.max(0.55) + dt * 1.8).min(1.0)
+    } else {
+        0.0
+    }
+}
+
+/// The player's choice of side: A/D or the arrows from the driver's seat,
+/// or a thumb dragged across the screen toward a side. It holds for a
+/// couple of seconds after the input lets go.
+fn steer_input(t: &Track, body: &mut Body, input: &Input) {
+    const HOLD: u32 = 240;
+    let car = &mut body.car;
+    car.nudge_ticks = car.nudge_ticks.saturating_sub(1);
+    // The road's positive side is the driver's right as the camera sees it.
+    let mut chosen = 0.0;
+    if input.held("left") {
+        chosen = -1.0;
+    } else if input.held("right") {
+        chosen = 1.0;
+    }
+    let drag = input.stick("swipe");
+    if chosen == 0.0 && drag.length() > 0.5 {
+        // Screen right is +x and screen up is -z: which side of the road is that?
+        let toward = Vec2::new(drag.x, -drag.y);
+        let lateral = toward.dot(t.normal(car.idx as usize));
+        if lateral.abs() > 0.35 * toward.length() {
+            chosen = lateral.signum();
+        }
+    }
+    if chosen != 0.0 {
+        car.nudge = chosen;
+        car.nudge_ticks = HOLD;
+    } else if car.nudge_ticks == 0 {
+        car.nudge = 0.0;
+    }
+}
+
+/// The full assist: off the gas when the car is coming into a corner too
+/// fast for it, and on the brakes when far too fast.
+fn lift_for_corners(t: &Track, body: &mut Body) {
+    let i = t.wrap(body.car.idx as i64 + (8.0 / t.step) as i64);
+    let v = body.v().length();
+    let plan = t.speed[i];
+    if v > plan * 1.05 {
+        body.car.gas = 0.0;
+    }
+    if v > plan * 1.14 {
+        body.car.brake = true;
+    }
+}
+
+/// How far (m) the nearest rival is from the player.
+fn nearest_rival(w: &World) -> f32 {
+    let me = w.require::<Transform>("player").position;
+    w.query::<(&Transform, &Car)>()
+        .iter()
+        .filter(|(_, (_, c))| c.ai)
+        .map(|(_, (p, _))| (p.position - me).length())
+        .fold(f32::MAX, f32::min)
 }
 
 /// Each wheel turns by its car's `spin` (rolling forward about the axle, which
@@ -873,19 +1037,27 @@ fn rain(w: &mut World) {
 
 /// Ease the camera's focus toward a point ahead of the player.
 fn camera(w: &mut World, snap: bool) {
-    let (p, v) = {
+    let (p, v, idx) = {
         let pose = w.require::<Transform>("player");
         let car = w.require::<Car>("player");
         (
             Vec2::new(pose.position.x, pose.position.z),
             Vec2::new(car.vx, car.vz),
+            car.idx as usize,
         )
     };
-    let target = p + v * 0.35;
+    // Lead along the road, and a little toward the inside of the corner coming up.
+    let (turn, normal) = {
+        let t = w.resource::<Track>();
+        let ahead = t.wrap(idx as i64 + (20.0 / t.step) as i64);
+        (t.turn_ahead(idx), t.normal(ahead))
+    };
+    let speed = v.length();
+    let target = p + v * 0.38 + normal * (turn * 2.5);
     let ground = w.require::<Car>("player").y;
     let dt = w.dt();
     let now = w.tick() as f32 * dt;
-    let (focus, shake) = {
+    let (focus, shake, lift) = {
         let mut race = w.resource_mut::<Race>();
         let k = if snap { 1.0 } else { (dt * 3.0).min(1.0) };
         race.focus_x += (target.x - race.focus_x) * k;
@@ -894,8 +1066,16 @@ fn camera(w: &mut World, snap: bool) {
         let ky = if snap { 1.0 } else { (dt * 1.5).min(1.0) };
         race.focus_y += (ground - race.focus_y) * ky;
         race.shake *= 1.0 - (dt * 7.0).min(1.0);
+        // Pull back a little at speed, to see more of what is coming.
+        let lift = 30.0 + 4.0 * (speed / track::VMAX).clamp(0.0, 1.0);
+        let kl = if snap { 1.0 } else { (dt * 0.8).min(1.0) };
+        race.lift += (lift - race.lift) * kl;
         // Aim up-screen of the car, so it sits below the middle with more road ahead.
-        (Vec3::new(race.focus_x, race.focus_y, race.focus_z - 3.0), race.shake)
+        (
+            Vec3::new(race.focus_x, race.focus_y, race.focus_z - 3.0),
+            race.shake,
+            race.lift,
+        )
     };
     let jolt = Vec3::new(
         math::sin(now * 53.0),
@@ -908,7 +1088,7 @@ fn camera(w: &mut World, snap: bool) {
     let mut cam = w.require_mut::<Transform>("camera");
     // A little lower and further back than straight down, so hills and jumps
     // show as depth as well as light.
-    *cam = Transform::at(focus.x, focus.y + 30.0, focus.z + 27.0).looking_at(focus, Vec3::Y);
+    *cam = Transform::at(focus.x, focus.y + lift, focus.z + lift * 0.9).looking_at(focus, Vec3::Y);
     cam.position += jolt;
 }
 
@@ -1135,6 +1315,7 @@ fn hud(w: &World) {
         gas: player.gas > 0.0,
         brake: player.brake,
         air: player.air && player.air_ticks >= car::JUMP_TICKS,
+        draft: player.draft > 0.45 && speed > 12.0,
         off: player.surface == car::GRASS,
         standings: rows,
         radar,

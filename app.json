@@ -4,6 +4,7 @@
     "id": "com.chrfalch.kerb-racers"
   },
   "game": {
+    "audio": true,
     "assets": true,
     "render": {
       "crate": "kerb-racers-render",
