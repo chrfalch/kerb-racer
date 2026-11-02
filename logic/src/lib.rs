@@ -167,7 +167,6 @@ pub struct Hud {
     pub speed: u32,
     pub gas: bool,
     pub brake: bool,
-    pub sliding: bool,
     /// The player's car is in the air off a jump.
     pub air: bool,
     pub off: bool,
@@ -1049,8 +1048,6 @@ fn hud(w: &World) {
     let race = w.resource::<Race>().clone();
     let t = w.resource::<Track>();
     let name = track::layout(t.id).name.to_string();
-    // On dirt every corner is a slide: the badge would never go out.
-    let dirt = t.dirt;
     let order = standings(w);
     let radar = radar(w, &t, &order);
     drop(t);
@@ -1137,7 +1134,6 @@ fn hud(w: &World) {
         speed: (speed * 3.6).round() as u32,
         gas: player.gas > 0.0,
         brake: player.brake,
-        sliding: player.sliding && !dirt,
         air: player.air && player.air_ticks >= car::JUMP_TICKS,
         off: player.surface == car::GRASS,
         standings: rows,
