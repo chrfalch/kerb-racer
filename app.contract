@@ -155,7 +155,7 @@ component KerbRacers
   state paused = false
   state hint = 0
   state started = false
-  // Sound: off by choice (remembered); the ring/silent switch mutes it too.
+  // Sound: off by choice (remembered). app.json sets audio_session "playback", so the ring/silent switch does not mute it.
   state muted = false persist
   // The menu music waits for a first tap: browsers start sound only from one.
   state awake = false
