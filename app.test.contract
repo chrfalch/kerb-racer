@@ -26,3 +26,12 @@ test "Sound wakes on a tap, mutes, and stays muted in the race"
   tap "start"
   tap "sound"
   expect state muted == false
+
+test "The track carousel picks the card it centers"
+  expect state track == 0
+  tap "track-3"
+  clock +800
+  expect state track == 3
+  tap "track-1"
+  clock +800
+  expect state track == 1
