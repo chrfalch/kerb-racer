@@ -160,14 +160,14 @@ component KerbRacers
   action pick(n: number)
     track = n
     awake = true
-    scrollIntoView(`track-${n}`, block="nearest", inline="center", behavior="smooth")
+    scrollIntoView(`track-${n}`, block="nearest", inline="start", behavior="smooth")
 
-  // The carousel's arrows: one circuit along, wrapping at either end.
-  action step(by: number)
-    let next = (track + by + 5) % 5
-    track = next
-    awake = true
-    scrollIntoView(`track-${next}`, block="nearest", inline="center", behavior="smooth")
+  // The carousel picks the card that sits in its middle: each card and its gap are 164 wide.
+  action scrolled(x: number, y: number)
+    let n = max(0, min(4, round(x / 164)))
+    if n != track
+      track = n
+      awake = true
 
   action toggleSound
     muted = awake ? not muted : false
@@ -374,16 +374,16 @@ component KerbRacers
                   text "SHORT TRACKS · SIX CARS · TWO PEDALS" font-size=13 font-weight=900 letter-spacing=2 color="#ffffff"
               text "CHOOSE YOUR CIRCUIT" font-size=12 font-weight=900 letter-spacing=3 color="#fbf6e9" padding-top=4 padding-bottom=4 padding-left=10 padding-right=10 border-radius=8 background-color="#14201bcc"
               // The circuits, a strip that scrolls sideways and snaps each card to the middle.
-              row testId="tracks" align-items="center" gap=6 width="min(100%, 760px)"
-                CarouselArrow(next=false, step=step)
-                scroll testId="track-strip" flex=1 min-width=0 overflow-x="auto" overflow-y="hidden" scrollbar-width="none" scroll-snap-type="x mandatory" scroll-padding-left="calc(50% - 75px)" mask-image="linear-gradient(to right, transparent, #000 8%, #000 92%, transparent)"
-                  row gap=14 padding-top=14 padding-bottom=16 padding-left="calc(50% - 75px)" padding-right="calc(50% - 75px)"
+              row testId="tracks" width="min(100%, 760px)"
+                scroll testId="track-strip" scroll=scrolled width="100%" overflow-x="auto" overflow-y="hidden" scrollbar-width="none" scroll-snap-type="x mandatory" scroll-padding-left="calc(50% - 75px)" padding-left="calc(50% - 75px)"
+                  row gap=14 padding-top=14 padding-bottom=16
                     for n in [0, 1, 2, 3, 4] key=n
                       button press=pick(n) id=`track-${n}` testId=`track-${n}` aria-label=trackName(n) aria-pressed=(track == n) width=150 flex-shrink=0 scroll-snap-align="start" padding=8 border-radius=18 background-color=(track == n ? "#f2c230" : "#14201be6") border-width=3 border-color=(track == n ? "#fff4b0" : "#fbf6e922") box-shadow=(track == n ? "0 6px 0 #a0701a" : "0 6px 0 #0b120d") scale=(track == n ? 1.06 : 0.94) opacity=(track == n ? 1 : 0.8) rotate=(track == n ? "-2deg" : "0deg") transition="scale 0.2s, rotate 0.2s, opacity 0.2s"
                         :hover
                           border-color="#fff4b0"
                         TrackCard(n=n, picked=(track == n))
-                CarouselArrow(next=true, step=step)
+                    // Room after the last card, so it can reach the middle too.
+                    box width="50vw" flex-shrink=0 aria-hidden=true
               row gap=8 align-items="center" aria-hidden=true
                 for n in [0, 1, 2, 3, 4] key=n
                   box width=(track == n ? 22 : 8) height=8 border-radius=4 background-color=(track == n ? "#f2c230" : "#fbf6e966") -exact-layout-transition="200ms ease"
@@ -581,18 +581,6 @@ component RaceScene
             circle cx=26 cy=-7 r=2.4 fill="#fff3b0"
             circle cx=26 cy=7 r=2.4 fill="#fff3b0"
       rect x=0 y=0 width=1600 height=900 fill="url(#kr-vignette)"
-
-// The track carousel's previous and next buttons.
-component CarouselArrow
-  props
-    next: bool
-    step: action
-  view
-    button press=step(next ? 1 : -1) testId=(next ? "track-next" : "track-prev") aria-label=(next ? "Next circuit" : "Previous circuit") width=44 height=44 flex-shrink=0 align-items="center" justify-content="center" border-radius=22 background-color="#14201bcc" border-width=2 border-color="#fbf6e933"
-      :hover
-        border-color="#fff4b0"
-      svg width=16 height=16 viewBox="0 0 16 16" aria-hidden=true
-        polyline points=(next ? "5,2 11,8 5,14" : "11,2 5,8 11,14") fill="none" stroke="#fbf6e9" stroke-width=3 stroke-linecap="round" stroke-linejoin="round"
 
 // A circuit's card on the menu: its real layout, with a dot lapping it when picked.
 component TrackCard
