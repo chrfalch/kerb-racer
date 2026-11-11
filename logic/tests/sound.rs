@@ -123,9 +123,7 @@ fn the_race_is_heard_within_the_voice_budget() {
         }
         if v > target + 0.5 {
             game.key_up("KeyW");
-            game.key_down("KeyS");
         } else {
-            game.key_up("KeyS");
             game.key_down("KeyW");
         }
         game.run(1000.0 / 120.0);

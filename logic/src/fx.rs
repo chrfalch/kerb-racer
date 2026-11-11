@@ -184,11 +184,7 @@ pub fn car(w: &mut World, t: &Track, body: &mut Body, name: &str, dt: f32) {
 /// where it has to be braking now; and the arrow on the side it will pass.
 pub fn player(w: &mut World, t: &Track, body: &Body, assist: u32) {
     let car = &body.car;
-    let side = if car.pass != 0 {
-        car.pass_side
-    } else {
-        car.nudge
-    };
+    let side = if car.pass != 0 { car.pass_side } else { 0.0 };
     show(w, "side-arrow", side != 0.0 && !car.finished);
     if side != 0.0 {
         // The car's local +Z is the road's positive side.

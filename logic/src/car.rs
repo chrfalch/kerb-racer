@@ -8,6 +8,9 @@ pub const ENGINE: f32 = 17.0;
 /// Where the engine runs out of pull (m/s); drag holds the car a little under it.
 pub const TOP: f32 = 34.0;
 pub const BRAKE: f32 = 24.0;
+/// Letting go of the gas brakes this much of the pedal's force, too little to
+/// lock the wheels: the player's only way to slow, it has to feel smooth.
+pub const LIFT: f32 = 0.2;
 /// Rolling resistance and the extra engine braking with no pedal.
 pub const ROLL: f32 = 0.6;
 pub const COAST: f32 = 1.4;
@@ -77,6 +80,8 @@ pub struct Car {
     pub finish_tick: u64,
     pub gas: f32,
     pub brake: bool,
+    /// The brake comes from a lift off the gas: gentle, see [`LIFT`].
+    pub lift: bool,
     pub sliding: bool,
     pub surface: u32,
     /// Front wheels' steering angle (radians, left positive).
@@ -113,10 +118,6 @@ pub struct Car {
     /// this car goes by (1 left, -1 right), held until it is clear.
     pub pass: u32,
     pub pass_side: f32,
-    /// The player's chosen side (1 left, -1 right, 0 the auto-steer's own
-    /// choice) and how many more ticks it holds after the input lets go.
-    pub nudge: f32,
-    pub nudge_ticks: u32,
     /// A rival covering the inside of the next corner (its side, 0 for none).
     pub defend: f32,
     /// How deep in another car's slipstream (0..1).
@@ -291,10 +292,6 @@ pub fn plan(track: &Track, bodies: &mut [Body], dt: f32) -> Vec<f32> {
             if b >= n || !(-PASS_CLEAR..14.0).contains(&gap(a, b)) {
                 pass = 0;
             } else {
-                // The player may switch sides while still behind.
-                if car.nudge != 0.0 && car.nudge != pass_side && gap(a, b) > 1.0 && room(car.nudge, side[b]) >= PASS_GAP {
-                    pass_side = car.nudge;
-                }
                 want = Some(beside(side[b], pass_side));
             }
         }
@@ -309,9 +306,7 @@ pub fn plan(track: &Track, bodies: &mut [Body], dt: f32) -> Vec<f32> {
             if let Some((g, b)) = blocker {
                 if speed[a] + 0.5 > speed[b] {
                     let other = side[b];
-                    let prefer = if car.nudge != 0.0 {
-                        car.nudge
-                    } else if turn != 0.0 {
+                    let prefer = if turn != 0.0 {
                         turn
                     } else if room(1.0, other) > room(-1.0, other) {
                         1.0
@@ -354,11 +349,6 @@ pub fn plan(track: &Track, bodies: &mut [Body], dt: f32) -> Vec<f32> {
             }
         } else {
             defend = 0.0;
-        }
-        // The player's side with nobody to pass: move over (to line up a
-        // slipstream, or to cover the inside).
-        if !car.ai && pass == 0 && car.nudge != 0.0 {
-            want = Some(line + car.nudge * 2.2);
         }
 
         // Never steer into a car alongside: keep its width plus a little away.
@@ -457,7 +447,7 @@ pub fn hash01(a: u32, b: u32, c: u32) -> f32 {
 /// so they lock and the car slides on; off the brake they grip and roll at
 /// ground speed again; pulling away they spin up a little.
 fn wheels(car: &mut Car, ground: f32, dt: f32) {
-    if car.brake {
+    if car.brake && !car.lift {
         car.roll = (car.roll - WHEEL_BRAKE * dt).max(0.0);
     } else {
         let wheelspin = car.gas * (9.0 - ground).max(0.0) * 0.45;
@@ -550,6 +540,7 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
         // Only the air slows it.
         vf -= drag * vf * vf * dt;
     } else if body.car.brake {
+        let brake = if body.car.lift { brake * LIFT } else { brake };
         vf -= brake.min(vf.abs() / dt).copysign(vf) * dt;
     } else {
         let top = TOP * (1.0 + DRAFT_TOP * draft);
