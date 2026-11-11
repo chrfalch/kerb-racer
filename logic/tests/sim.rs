@@ -72,9 +72,8 @@ fn rivals_finish_three_laps_on_every_track() {
                 )
             };
             if v > target + 0.5 {
-                game.key_down("KeyS");
+                game.key_up("KeyW");
             } else {
-                game.key_up("KeyS");
                 game.key_down("KeyW");
             }
             game.run(1000.0 / 120.0);
@@ -162,7 +161,7 @@ fn scenery_budget() {
 }
 
 #[test]
-fn wheels_roll_with_the_road_and_lock_under_braking() {
+fn wheels_roll_with_the_road_and_through_a_lift() {
     let mut game = race(0);
     game.run(3500.0);
     game.key_down("KeyW");
@@ -174,16 +173,13 @@ fn wheels_roll_with_the_road_and_lock_under_braking() {
     let before = car.spin;
     game.run(100.0);
     assert_ne!(game.world().require::<Car>("player").spin, before, "wheels turn");
-    // Stamp on the brake: the wheels lock well before the car stops.
+    // Let go, and the lift brakes gently: the wheels keep rolling with the road.
     game.key_up("KeyW");
-    game.key_down("KeyS");
     game.run(400.0);
     let car = game.world().require::<Car>("player").clone();
-    let ground = (car.vx * car.vx + car.vz * car.vz).sqrt();
-    assert!(ground > 2.0 && car.roll == 0.0, "car {ground} m/s, wheels {}", car.roll);
-    let locked = car.spin;
-    game.run(100.0);
-    assert_eq!(game.world().require::<Car>("player").spin, locked, "locked wheels hold still");
+    let slower = (car.vx * car.vx + car.vz * car.vz).sqrt();
+    assert!(slower < ground, "{slower} m/s after a lift from {ground}");
+    assert!((car.roll - slower).abs() < 1.0, "car {slower} m/s, wheels {}", car.roll);
 }
 
 /// The woods as art/src/shade.py reads them: every tree, bush and fence section

@@ -26,7 +26,7 @@ if (import.meta.main) await proof(import.meta, async ({open, check, out, host, p
   const ax = await axNames(s);
   check('Race is focused and named', node(title, 'play')?.focused === true && (ax.unavailable || ax.name('play') === 'Race'));
   check('five tracks offered', ['track-0', 'track-1', 'track-2', 'track-3', 'track-4'].every(id => !!node(title, id)));
-  check('controls explained', title.nodes.some(n => n.props?.text === 'Right click: gas · Left click: brake'));
+  check('controls explained', title.nodes.some(n => /Hold anywhere: gas · Let go: brake/.test(n.props?.text ?? '')));
   check('world loads only after Race', !node(title, 'world'));
   if (host === 'web') await s.screenshot(resolve(out, 'menu.png'));
   await s.tap('play');
@@ -43,11 +43,11 @@ if (import.meta.main) await proof(import.meta, async ({open, check, out, host, p
   await game.hold('KeyW', 2000);
   const moved = await game.global_position('player');
   const car = await game.get('player', 'Car');
-  check('right click is gas', Math.hypot(moved[0] - grid[0], moved[2] - grid[2]) > 10 && speed2(car) > 200, {moved, car});
+  check('holding is gas', Math.hypot(moved[0] - grid[0], moved[2] - grid[2]) > 10 && speed2(car) > 200, {moved, car});
   check('speed reaches the HUD', Number(text(await s.tree(), 'hud-speed')) > 50);
-  await game.hold('KeyS', 600);
+  await game.run(600);
   const braked = await game.get('player', 'Car');
-  check('left click is brake', speed2(braked) < speed2(car), {braked});
+  check('letting go is brake', speed2(braked) < speed2(car), {braked});
   await game.run(400);
   if (host === 'web') await s.screenshot(resolve(out, 'game.png'));
   await game.save(resolve(out, 'final.world'));
@@ -61,10 +61,10 @@ if (import.meta.main) await proof(import.meta, async ({open, check, out, host, p
   await s.tap('restart');
   check('restart returns to the grid', !!node(await s.tree(), 'countdown'));
   await game.run(3500);
-  // Pulse the pedals: mostly gas, a dab of brake, about 80 % of a lap's pace.
+  // Pulse the gas: mostly held, a short lift to brake, about 80 % of a lap's pace.
   for (let k = 0; k < 400 && (k % 8 || text(await s.tree(), 'result-title') === undefined); k++) {
     await game.hold('KeyW', 400);
-    await game.hold('KeyS', 120);
+    await game.run(120);
   }
   const done = await s.tree();
   check('a careful race reaches the results', !!node(done, 'results') && /You (win|finished)/.test(text(done, 'result-title') ?? ''), text(done, 'result-title'));

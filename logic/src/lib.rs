@@ -1,7 +1,7 @@
-//! Kerb Racers: a short top-down circuit race. You hold the pedals (right
-//! click for gas, left click to brake); the car steers itself along the
-//! racing line, and the tyres decide whether it makes the corner. A or D (or
-//! a thumb dragged sideways) picks the side to pass on.
+//! Kerb Racers: a short top-down circuit race. Hold a mouse button, a key or
+//! a finger down for gas and let go to brake; the car steers itself along
+//! the racing line and picks its own side to pass on, and the tyres decide
+//! whether it makes the corner.
 pub mod car;
 pub mod fx;
 pub mod scenery;
@@ -315,16 +315,8 @@ impl Game for KerbRacers {
     type Args = Options;
     fn actions() -> Actions {
         Actions::new()
-            .button("gas", &["MouseRight", "ArrowUp", "KeyW"])
-            .button_touch("gas", Region::Right)
-            .button("brake", &["MouseLeft", "ArrowDown", "KeyS", "Space"])
-            .button_touch("brake", Region::Left)
-            // The side to pass on, from the driver's seat: A or ← for the
-            // left, D or → for the right; on touch, drag the thumb that
-            // holds a pedal toward the side on screen.
-            .button("left", &["KeyA", "ArrowLeft"])
-            .button("right", &["KeyD", "ArrowRight"])
-            .stick("swipe", Stick::touch(Region::All))
+            .button("gas", &["MouseLeft", "MouseRight", "ArrowUp", "KeyW", "Space"])
+            .button_touch("gas", Region::All)
     }
     fn validate(args: &Options) -> Result<(), String> {
         if args.quality > 2 {
@@ -562,8 +554,9 @@ impl Game for KerbRacers {
         } else {
             let dt = w.dt();
             let mut player = w.require_mut::<Car>("player");
-            player.gas = throttle(player.gas, input.held("gas"), dt);
-            player.brake = input.held("brake");
+            let held = input.held("gas");
+            player.gas = throttle(player.gas, held, dt);
+            player.brake = !held;
         }
         sound::tick(w, now, start, args.volume);
         camera(w, false);
@@ -594,9 +587,6 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
         body.car.bump = 0.0;
     }
     let assist = w.resource::<Race>().assist;
-    if let Some(player) = list.iter_mut().find(|b| b.car.id == PLAYER) {
-        steer_input(&t, player, input);
-    }
     let caps = car::plan(&t, &mut list, dt);
     // Rivals keep in touch: a little quicker while behind the player, a
     // little easier while ahead, at most 3% either way.
@@ -621,12 +611,10 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
             }
             car::drive(&t, body, caps[k]);
         } else {
-            body.car.brake = input.held("brake");
-            body.car.gas = if body.car.brake {
-                0.0
-            } else {
-                throttle(body.car.gas, input.held("gas"), dt)
-            };
+            let held = input.held("gas");
+            body.car.gas = throttle(body.car.gas, held, dt);
+            body.car.brake = !held;
+            body.car.lift = !held;
             if assist >= 2 {
                 lift_for_corners(&t, body);
             }
@@ -737,37 +725,6 @@ fn throttle(gas: f32, held: bool, dt: f32) -> f32 {
     }
 }
 
-/// The player's choice of side: A/D or the arrows from the driver's seat,
-/// or a thumb dragged across the screen toward a side. It holds for a
-/// couple of seconds after the input lets go.
-fn steer_input(t: &Track, body: &mut Body, input: &Input) {
-    const HOLD: u32 = 240;
-    let car = &mut body.car;
-    car.nudge_ticks = car.nudge_ticks.saturating_sub(1);
-    // The road's positive side is the driver's right as the camera sees it.
-    let mut chosen = 0.0;
-    if input.held("left") {
-        chosen = -1.0;
-    } else if input.held("right") {
-        chosen = 1.0;
-    }
-    let drag = input.stick("swipe");
-    if chosen == 0.0 && drag.length() > 0.5 {
-        // Screen right is +x and screen up is -z: which side of the road is that?
-        let toward = Vec2::new(drag.x, -drag.y);
-        let lateral = toward.dot(t.normal(car.idx as usize));
-        if lateral.abs() > 0.35 * toward.length() {
-            chosen = lateral.signum();
-        }
-    }
-    if chosen != 0.0 {
-        car.nudge = chosen;
-        car.nudge_ticks = HOLD;
-    } else if car.nudge_ticks == 0 {
-        car.nudge = 0.0;
-    }
-}
-
 /// The full assist: off the gas when the car is coming into a corner too
 /// fast for it, and on the brakes when far too fast.
 fn lift_for_corners(t: &Track, body: &mut Body) {
@@ -779,6 +736,7 @@ fn lift_for_corners(t: &Track, body: &mut Body) {
     }
     if v > plan * 1.14 {
         body.car.brake = true;
+        body.car.lift = false;
     }
 }
 

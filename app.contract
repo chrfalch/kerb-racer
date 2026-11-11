@@ -322,18 +322,16 @@ component KerbRacers
                 text hud.track rotate="-2deg" font-size=26 font-weight=900 font-style="italic" letter-spacing=2 color="#22252b" padding-top=4 padding-bottom=4 padding-left=16 padding-right=16 border-radius=8 background-color="#f2c230" border-width=2 border-color="#22252b" box-shadow="0 4px 0 #a0701a"
                 column padding-top=18 padding-bottom=18 padding-left=34 padding-right=34 border-radius=16 background-color="#d83a2e" border-width=3 border-color="#ff8a7a" box-shadow="0 7px 0 #7a1d16" animation="pulse 1.2s ease-in-out infinite"
                   text "CLICK TO START" font-size=28 font-weight=900 font-style="italic" letter-spacing=3 color="#ffffff"
-                row gap=10 flex-wrap="wrap" justify-content="center"
-                  Pedal(right=false)
-                  Pedal(right=true)
+                text "Hold anywhere, W, ↑ or Space: gas · Let go: brake" font-size=15 font-weight=800 color="#fbf6e9" text-align="center" padding-top=8 padding-bottom=8 padding-left=14 padding-right=14 border-radius=12 background-color="#14201be6"
                 text "Steering is automatic. Too fast into a corner and you'll slide off." font-size=14 color="#fbf6e9" text-align="center" padding-top=6 padding-bottom=6 padding-left=12 padding-right=12 border-radius=10 background-color="#14201bb3"
-                text "A / D: pass on the left or right · Follow close behind to slipstream" font-size=13 color="#c9d6b8" text-align="center"
+                text "Your car picks its side to pass · Follow close behind to slipstream" font-size=13 color="#c9d6b8" text-align="center"
           if hud.phase == "grid" and started
             column testId="countdown" position="absolute" top="calc(env(safe-area-inset-top) + 24px)" left="env(safe-area-inset-left)" right="env(safe-area-inset-right)" align-items="center" gap=8 pointer-events="none"
               text `${hud.count}` font-size=84 font-weight=900 color="#fbf6e9"
               text hud.track font-size=20 font-weight=700 color="#f2c230"
-              text "Right click: gas · Left click: brake" padding=10 border-radius=12 background-color="#14201bcc"
+              text "Hold anywhere, W, ↑ or Space: gas · Let go: brake" padding=10 border-radius=12 background-color="#14201bcc"
               text "Steering is automatic. Too fast into a corner and you'll slide off." font-size=14 color="#c9d6b8"
-              text "A / D or a sideways drag: choose the side to pass on" font-size=13 color="#c9d6b8"
+              text "Your car picks its side to pass." font-size=13 color="#c9d6b8"
           if hud.go
             column testId="go" position="absolute" top="calc(env(safe-area-inset-top) + 24px)" left="env(safe-area-inset-left)" right="env(safe-area-inset-right)" align-items="center" pointer-events="none"
               text "GO!" font-size=84 font-weight=900 color="#3fae5a"
@@ -411,13 +409,11 @@ component KerbRacers
                   svg width=30 height=26 viewBox="0 0 30 26" aria-hidden=true
                     for c in [0, 1, 2] key=c
                       polyline points=`${c * 9},3 ${c * 9 + 10},13 ${c * 9},23` fill="none" stroke="#fff4b0" stroke-width=4 stroke-linecap="round" stroke-linejoin="round" animation=`blink 0.75s ease-in-out ${c * 0.25 - 0.75}s infinite`
-              row gap=10 flex-wrap="wrap" justify-content="center" margin-top=6
-                Pedal(right=false)
-                Pedal(right=true)
+              text "Hold anywhere, W, ↑ or Space: gas · Let go: brake" margin-top=6 font-size=13 font-weight=800 color="#fbf6e9" text-align="center" padding-top=8 padding-bottom=8 padding-left=12 padding-right=12 border-radius=12 background-color="#14201be6"
               column align-items="center" gap=3 padding-top=6 padding-bottom=6 padding-left=12 padding-right=12 border-radius=10 background-color="#14201bb3"
                 text "Steering is automatic. Full speed into a corner and you will slide off." font-size=13 color="#fbf6e9" text-align="center"
-                text "On touch: right half is gas, left half is brake. Drag sideways to pick a side to pass." font-size=11 color="#c9d6b8" text-align="center"
-                text "Keys: A / D pass left or right. Tuck in behind a car to slipstream it." font-size=11 color="#c9d6b8" text-align="center"
+                text "Hold anywhere: gas · Let go: brake. Your car picks its side to pass." font-size=11 color="#c9d6b8" text-align="center"
+                text "Tuck in behind a car to slipstream it." font-size=11 color="#c9d6b8" text-align="center"
               row gap=8 align-items="center" padding=6 border-radius=12 background-color="#14201bcc"
                 text "ASSIST" font-size=11 font-weight=900 letter-spacing=2 color="#c9d6b8" padding-left=6
                 for n in [0, 1, 2] key=n
@@ -644,25 +640,3 @@ component Speaker
       else
         line x1=14.5 y1=8 x2=20 y2=14 stroke="#ff8a7a" stroke-width=2.2 stroke-linecap="round"
         line x1=20 y1=8 x2=14.5 y2=14 stroke="#ff8a7a" stroke-width=2.2 stroke-linecap="round"
-
-// A mouse with its left or right button lit: how to drive.
-component Mouse
-  props
-    right: bool
-  view
-    svg width=24 height=32 viewBox="0 0 24 32" aria-hidden=true
-      rect x=1.5 y=1.5 width=21 height=29 rx=10.5 fill="#fbf6e9" stroke="#22252b" stroke-width=1.5
-      path d=(right ? "M 12 1.5 A 10.5 10.5 0 0 1 22.5 12 L 22.5 13 L 12 13 Z" : "M 12 1.5 A 10.5 10.5 0 0 0 1.5 12 L 1.5 13 L 12 13 Z") fill=(right ? "#3fae5a" : "#d83a2e")
-      line x1=12 y1=1.5 x2=12 y2=13 stroke="#22252b" stroke-width=1.5
-      line x1=1.5 y1=13 x2=22.5 y2=13 stroke="#22252b" stroke-width=1.5
-
-// A pedal's hint: which mouse button drives it.
-component Pedal
-  props
-    right: bool
-  view
-    row gap=8 align-items="center" padding-top=6 padding-bottom=6 padding-left=8 padding-right=12 border-radius=12 background-color="#14201be6"
-      Mouse(right=right)
-      column
-        text (right ? "RIGHT CLICK" : "LEFT CLICK") font-size=10 font-weight=800 letter-spacing=1 color="#c9d6b8"
-        text (right ? "GAS" : "BRAKE") font-size=15 font-weight=900 color=(right ? "#a6e8b4" : "#ff8a7a")

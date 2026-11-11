@@ -1,5 +1,5 @@
-//! Racing between cars: passes, the side the player picks, slipstreams, the
-//! rivals' characters, and what the player sees of it.
+//! Racing between cars: passes, slipstreams, the rivals' characters, and
+//! what the player sees of it.
 use exact_game::{Sim, Vec2, Visible};
 use kerb_racers_logic::car::{self, Body, Car, GRASS, PASS_GAP, SIDE_GAP};
 use kerb_racers_logic::track::{self, Track};
@@ -101,40 +101,6 @@ fn nobody_steers_into_a_car_alongside() {
 }
 
 #[test]
-fn the_player_picks_the_side_to_pass_on() {
-    let t = track::build(0);
-    let i = straight(&t);
-    let line = t.line[i].clamp(-0.5, 0.5);
-    for nudge in [-1.0f32, 1.0] {
-        let mut cars = vec![body(&t, 0, i, line, 25.0), body(&t, 1, i + 6, line, 19.0)];
-        cars[0].car.ai = false;
-        cars[0].car.nudge = nudge;
-        car::plan(&t, &mut cars, 1.0 / 120.0);
-        assert_eq!(cars[0].car.pass_side, nudge);
-    }
-}
-
-#[test]
-fn a_and_d_choose_the_side() {
-    let mut game = race_with(0, 1);
-    // Once the lights are out.
-    game.run(3200.0);
-    game.key_down("KeyA");
-    game.run(100.0);
-    assert_eq!(game.world().require::<Car>("player").nudge, -1.0);
-    game.key_up("KeyA");
-    game.key_down("KeyD");
-    game.run(100.0);
-    assert_eq!(game.world().require::<Car>("player").nudge, 1.0);
-    game.key_up("KeyD");
-    // It holds a while after the key comes up, then lets go.
-    game.run(1000.0);
-    assert_eq!(game.world().require::<Car>("player").nudge, 1.0);
-    game.run(2000.0);
-    assert_eq!(game.world().require::<Car>("player").nudge, 0.0);
-}
-
-#[test]
 fn a_slipstream_pulls_a_car_along() {
     let t = track::build(0);
     let i = straight(&t);
@@ -159,36 +125,44 @@ fn a_slipstream_pulls_a_car_along() {
 }
 
 #[test]
-fn braking_dips_the_nose() {
+fn a_lift_dips_the_nose_a_little() {
     let mut game = race_with(0, 1);
     game.key_down("KeyW");
     game.run(5000.0);
     game.key_up("KeyW");
-    game.key_down("KeyS");
     let mut dive = 0.0f32;
     for _ in 0..30 {
         game.run(TICK);
         dive = dive.min(game.world().require::<Car>("player").pitch);
     }
     println!("nose down {:.1}°", -dive.to_degrees());
-    assert!(dive < -0.025, "the nose dives under braking: {dive}");
+    assert!(dive < -0.002, "a lift dips the nose: {dive}");
 }
 
 #[test]
-fn locked_wheels_lay_skid_marks() {
+fn a_lift_leaves_no_skid_marks() {
     let mut game = race_with(0, 1);
-    let marks = |game: &Sim<KerbRacers>| {
-        (0..fx::SKIDS)
-            .filter(|k| game.world().require::<Visible>(format!("skid-{k}").as_str()).0)
-            .count()
-    };
     game.key_down("KeyW");
     game.run(5000.0);
-    assert_eq!(marks(&game), 0, "none before anyone brakes hard");
     game.key_up("KeyW");
-    game.key_down("KeyS");
     game.run(600.0);
-    assert!(marks(&game) >= 4, "two streaks behind a locked car: {}", marks(&game));
+    assert_eq!(skid_marks(&game), 0);
+}
+
+#[test]
+fn the_full_assist_locks_the_wheels_and_lays_skid_marks() {
+    let mut game = race_with(0, 2);
+    game.key_down("KeyW");
+    game.run(5000.0);
+    assert_eq!(skid_marks(&game), 0, "none before anyone brakes hard");
+    game.run(6000.0);
+    assert!(skid_marks(&game) >= 4, "two streaks behind a locked car: {}", skid_marks(&game));
+}
+
+fn skid_marks(game: &Sim<KerbRacers>) -> usize {
+    (0..fx::SKIDS)
+        .filter(|k| game.world().require::<Visible>(format!("skid-{k}").as_str()).0)
+        .count()
 }
 
 #[test]
@@ -252,9 +226,7 @@ fn overtakes(track: u32, k: f32) -> (i32, u32, u32) {
         };
         if v > target + 0.5 {
             game.key_up("KeyW");
-            game.key_down("KeyS");
         } else {
-            game.key_up("KeyS");
             game.key_down("KeyW");
         }
         game.run(TICK);
@@ -309,3 +281,4 @@ fn a_faster_driver_makes_passes_stick() {
     }
     assert!(total >= 6, "a quicker driver works through the field: {total}");
 }
+
