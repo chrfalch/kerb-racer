@@ -207,7 +207,7 @@ component KerbRacers
     every(1400, nextHint)
 
   view
-    main viewport-fit="cover" width="100%" height="100%" background-color="#1d2b1a" color="#fbf6e9" font-family="system-ui"
+    main viewport-fit="cover" system-bars-hidden=true width="100%" height="100%" background-color="#1d2b1a" color="#fbf6e9" font-family="system-ui"
       if playing
         canvas surface=world(seed=7, track=track, laps=3, quality=1, assist=assist, paused=(paused or (not started and hud.phase != "race" and hud.phase != "done")), volume=(muted ? 0 : 1), restart=again) testId="world" width="100%" height="100%" position="relative" user-select="none"
           row testId="hud-top" position="absolute" top="calc(env(safe-area-inset-top) + 16px)" left="calc(env(safe-area-inset-left) + 16px)" gap=10 pointer-events="none"

@@ -966,6 +966,7 @@ fn headlights(w: &mut World, car: Entity) {
                 range: 32.0,
                 inner: 0.22,
                 outer: 0.5,
+                ..Default::default()
             },
             Parent(car),
             Ambient,
@@ -977,6 +978,7 @@ fn headlights(w: &mut World, car: Entity) {
             color: [1.0, 0.12, 0.08],
             intensity: 4000.0,
             range: 7.0,
+            ..Default::default()
         },
         Parent(car),
         Ambient,
