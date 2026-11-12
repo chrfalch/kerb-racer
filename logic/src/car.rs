@@ -10,7 +10,7 @@ pub const TOP: f32 = 34.0;
 pub const BRAKE: f32 = 24.0;
 /// Letting go of the gas brakes this much of the pedal's force, too little to
 /// lock the wheels: the player's only way to slow, it has to feel smooth.
-pub const LIFT: f32 = 0.2;
+pub const LIFT: f32 = 0.26;
 /// Rolling resistance and the extra engine braking with no pedal.
 pub const ROLL: f32 = 0.6;
 pub const COAST: f32 = 1.4;
