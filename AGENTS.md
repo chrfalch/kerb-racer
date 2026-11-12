@@ -7,17 +7,17 @@ controls are `app.contract` (Contract). `app.json` is optional and holds only ke
 you author (a title, `game.audio`, `game.assets`, a data crate). The bake generates
 the hosts under `.shells/` (ignored; never edit it), and so does `bun exact.mjs test-rust`:
 run that once before `cargo` in `render/` or a render example, whose workspace it is. The game uses the exact2 checkout
-at `../../exact2` by path (`EXACT2` overrides it).
+at `../../exact` by path (`EXACT` overrides it).
 
 Look things up in this order before reading engine source:
 
 - `bun exact.mjs game vocab <name>`: a component's fields and evaluated defaults, a `World` verb or a method, with its recipe (no name lists them all).
-- ../../exact2/game/recipes/README.md: runnable recipes by task: first the gameplay kit every game needs (steering, schools, pickups, spawners, a shop), which the starter's critter, coins and shop use; then cameras, emitters, sounds, saves, art export.
-- ../../exact2/game/names.md: names from three.js, Unity and Godot, and what they are here.
-- ../../exact2/game/README.md, by section: "The programming model", "Proof pins", "The agent's interface", "Determinism — the contract", "Assets, animation and placed UI".
-- ../../exact2/game/engine/README.md: the engine's reference (borrowing, registration, saves and assets).
-- ../../exact2/docs/contract-for-agents.md: Contract, for the menus and HUD; ../../exact2/docs/contract-grammar.md for exact forms and events (keys at a game's canvas too).
-- ../../exact2/docs/game-pitfalls.md: verified footguns in games, symptom → cause → fix (search it; ../../exact2/docs/agent-pitfalls.md holds Contract's).
+- ../../exact/game/recipes/README.md: runnable recipes by task: first the gameplay kit every game needs (steering, schools, pickups, spawners, a shop), which the starter's critter, coins and shop use; then cameras, emitters, sounds, saves, art export.
+- ../../exact/game/names.md: names from three.js, Unity and Godot, and what they are here.
+- ../../exact/game/README.md, by section: "The programming model", "Proof pins", "The agent's interface", "Determinism — the contract", "Assets, animation and placed UI".
+- ../../exact/game/engine/README.md: the engine's reference (borrowing, registration, saves and assets).
+- ../../exact/docs/contract-for-agents.md: Contract, for the menus and HUD; ../../exact/docs/contract-grammar.md for exact forms and events (keys at a game's canvas too).
+- ../../exact/docs/game-pitfalls.md: verified footguns in games, symptom → cause → fix (search it; ../../exact/docs/agent-pitfalls.md holds Contract's).
 
 Commands, from this directory (`exact.mjs` runs from any other too, and finds a file
 you name where you are, else here):
@@ -47,11 +47,16 @@ builds it with `exact_game::sim_with_art!(Options::default())`, which bakes `art
 your game's checks`: replace that block. A proof script under `tools/` proves this game
 too. Run `prove` once, last, when the game plays and `proof.mjs` describes it; it is the
 release baseline, and the loop above never waits on it.
-`bun ../../exact2/scripts/exact.mjs setup --check` names anything this machine is missing.
+`bun ../../exact/scripts/exact.mjs setup --check` names anything this machine is missing.
 
 Generated, so don't edit: `exact.mjs` and this block.
 
-The authoring diary: `bun exact.mjs feedback status` says whether this project keeps one.
+## Feedback (required)
+
+When a doc was wrong or missing, a workaround was needed, something took several tries or a
+command confused you, record it: `bun exact.mjs feedback note "<what happened>"`. It attaches
+exact2's commit and the last exit code, never output or code. `bun exact.mjs feedback status` says
+whether notes are sent and whether to keep a diary; under `never`, skip all of this.
 <!-- exact:end -->
 
 ## Baked shadows (read before changing trees, fences or props)
