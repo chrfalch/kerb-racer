@@ -1,6 +1,6 @@
 //! Car dynamics, the automatic steering every car shares, and the rivals'
 //! pedals. All cars step together on plain copies so they can push each other.
-use crate::track::{Track, G, HALF, KERB_IN, RUNOFF, VMAX};
+use crate::track::{smooth, Track, G, HALF, KERB_IN, RUNOFF, VMAX};
 use exact_game::*;
 
 /// Engine thrust at rest (m/s²); it fades linearly to nothing at VMAX.
@@ -172,6 +172,30 @@ pub const LIFT_OFF: f32 = 0.05;
 pub const SOAK: f32 = 40.0;
 /// Ticks in the air before it counts as a jump (for the HUD and the camera).
 pub const JUMP_TICKS: u32 = 12;
+/// Springy crests: the springs throw a car off a crest sharp enough that
+/// gravity alone would lift it off below `SPRING_SOFT` m/s, fully from
+/// `SPRING_STIFF` (see `rebound`): Misty Moor's last crest (18.2 m/s) fully,
+/// its gentler brows (19.8 m/s and up) not at all.
+pub const SPRING_SOFT: f32 = 19.5;
+pub const SPRING_STIFF: f32 = 18.5;
+/// How fast (m/s up) the springs throw a car crossing the top at `THROW_AT`
+/// m/s: about half a second in the air and half a metre up.
+pub const THROW: f32 = 2.75;
+pub const THROW_AT: f32 = 13.0;
+/// Coming any slower than this, a car is thrown no harder than at it.
+pub const THROW_FROM: f32 = 10.0;
+/// A hard landing shakes the car (`Car::shaken`): the share of its grip that
+/// is gone when fully shaken, and how fast (per second) that fades.
+pub const SHAKEN_GRIP: f32 = 0.55;
+pub const SHAKEN_FADE: f32 = 1.6;
+/// Landing on dirt or grass is this much rougher than on asphalt.
+pub const ROUGH: f32 = 1.5;
+
+/// How shaken (0..1) a landing at `impact` m/s leaves the car, `rough` times
+/// harder on loose ground.
+pub fn shaken_by(impact: f32, rough: f32) -> f32 {
+    (impact * rough / 7.0).min(1.0)
+}
 
 /// Surfaces under a car.
 pub const ASPHALT: u32 = 0;
@@ -536,7 +560,7 @@ pub fn step(track: &Track, body: &mut Body, dt: f32) {
     };
     let grip = if track.wet { grip * crate::track::WET } else { grip };
     let grip = if body.car.kerb { grip * KERB_GRIP } else { grip };
-    let grip = grip * body.car.load.clamp(0.3, 1.5) * (1.0 - 0.55 * body.car.shaken);
+    let grip = grip * body.car.load.clamp(0.3, 1.5) * (1.0 - SHAKEN_GRIP * body.car.shaken);
     let (mut drift, brake, mut max_slip) = if track.dirt {
         (DRIFT_DIRT, BRAKE_DIRT, MAX_SLIP_DIRT)
     } else {
@@ -637,10 +661,18 @@ fn vertical(track: &Track, body: &mut Body, slope: Vec2, dt: f32) {
     if !car.air {
         let follow = (ground - car.y) / dt;
         let fall = car.vy - G * dt;
-        if follow < fall - LIFT_OFF && v.length() > 4.0 {
+        let leaves = follow < fall - LIFT_OFF;
+        // Cresting the top (the road under it stops rising), or flying off it
+        // anyway while still rising, the springs throw the car up: once, as
+        // nothing past the top carries a car up again.
+        let cresting = car.vy > 0.0 && (leaves || follow <= 0.0);
+        let throw = cresting
+            .then(|| rebound(track.spring[car.idx as usize], v.length()))
+            .filter(|throw| *throw > LIFT_OFF);
+        if (leaves || throw.is_some()) && v.length() > 4.0 {
             car.air = true;
             car.air_ticks = 1;
-            car.vy = fall;
+            car.vy = throw.map_or(fall, |throw| fall.max(throw));
             car.y += car.vy * dt;
         } else {
             // What it takes to stay on the road is the weight on the tyres.
@@ -667,16 +699,38 @@ fn vertical(track: &Track, body: &mut Body, slope: Vec2, dt: f32) {
             car.landing = impact.max(0.01);
             car.load = 1.0;
             // Loose ground and grass give way: a rougher landing.
-            let rough = if track.dirt || car.surface != ASPHALT { 1.5 } else { 1.0 };
+            let rough = if track.dirt || car.surface != ASPHALT { ROUGH } else { 1.0 };
             let scrub = ((0.015 + 0.02 * impact) * rough).min(0.3);
             car.vx *= 1.0 - scrub;
             car.vz *= 1.0 - scrub;
-            car.shaken = car.shaken.max((impact * rough / 7.0).min(1.0));
+            car.shaken = car.shaken.max(shaken_by(impact, rough));
             car.squash_v -= impact * 0.4;
         }
     }
-    car.shaken = (car.shaken - dt * 1.6).max(0.0);
+    car.shaken = (car.shaken - dt * SHAKEN_FADE).max(0.0);
     pose(track, body, dt);
+}
+
+/// How much (0..1) the springs throw a car off a crest of sharpness `sharp`
+/// (see `Track::spring`): not at all off a gentle one.
+pub fn springiness(sharp: f32) -> f32 {
+    if sharp <= 0.0 {
+        return 0.0;
+    }
+    smooth(SPRING_SOFT, SPRING_STIFF, math::sqrt(G / sharp))
+}
+
+/// The upward speed (m/s) the springs throw a car at, going `speed` over the
+/// top of a crest of sharpness `sharp`. Pressed into the climb, they let go
+/// as the road drops away, rising smoothly from nothing as it falls away at
+/// a fifth of gravity to their full throw at under half. A faster car crosses
+/// the top sooner, so they push it for less time: from `THROW_FROM` up the
+/// throw falls with the square root of speed, which keeps its time in the
+/// air about the same however fast it comes; slower it is no harder than
+/// there, so a slow car's flight stays short and low too.
+pub fn rebound(sharp: f32, speed: f32) -> f32 {
+    let falls_away = speed * speed * sharp;
+    THROW * math::sqrt(THROW_AT / speed.max(THROW_FROM)) * springiness(sharp) * smooth(0.2 * G, 0.45 * G, falls_away)
 }
 
 /// Body pitch (radians) per m/s² of forward acceleration, and roll per m/s²
@@ -762,16 +816,18 @@ pub fn ground_tilt(track: &Track, p: Vec2, idx: usize, heading: f32) -> Tilt {
 /// How far the body, as posed, must rise above `y` for no wheel to be under
 /// the road.
 pub fn lift(track: &Track, body: &Body) -> f32 {
+    under_wheels(track, body).into_iter().fold(0.0, f32::max)
+}
+
+/// How far the ground stands above each corner wheel of the body as posed.
+fn under_wheels(track: &Track, body: &Body) -> [f32; 4] {
     let car = &body.car;
     let rot = body_rotation(car);
-    [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)]
-        .map(|(along, across)| {
-            // The wheels hang `squash` below the body (see `turn_wheels`).
-            let at = rot * Vec3::new(along * WHEELBASE / 2.0, -car.squash, across * WHEEL_SPREAD);
-            track.height(body.p + Vec2::new(at.x, at.z), car.idx as usize) - (car.y + car.squash + at.y)
-        })
-        .into_iter()
-        .fold(0.0, f32::max)
+    [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)].map(|(along, across)| {
+        // The wheels hang `squash` below the body (see `turn_wheels`).
+        let at = rot * Vec3::new(along * WHEELBASE / 2.0, -car.squash, across * WHEEL_SPREAD);
+        track.height(body.p + Vec2::new(at.x, at.z), car.idx as usize) - (car.y + car.squash + at.y)
+    })
 }
 
 /// The body's tilt and suspension, for drawing: lie along the ground under
@@ -798,23 +854,61 @@ fn pose(track: &Track, body: &mut Body, dt: f32) {
     let k = (dt * rate).min(1.0);
     car.pitch += (pitch - car.pitch) * k;
     car.lean += (lean - car.lean) * k;
-    if let Some(Tilt { ground: (along, across), .. }) = tilt {
-        // No further from the ground than the wheels can drop to reach it
-        // (with 8 cm to spare for each car's own wheel places): down a steep
-        // hill in a corner, or landing nose up on a descent, the body comes
-        // back toward the road.
-        let (pitch, lean) = (car.pitch - along, car.lean - across);
-        let reach = WHEELBASE * pitch.abs() + 2.0 * WHEEL_SPREAD * lean.abs();
-        let k = ((DROOP - 0.08) / reach.max(1e-6)).min(1.0);
-        (car.pitch, car.lean) = (along + pitch * k, across + lean * k);
-    }
     // A spring settling where the load puts it.
     let rest = -(car.load - 1.0) * 0.06;
     car.squash_v += (-180.0 * (car.squash - rest) - 13.0 * car.squash_v) * dt;
     car.squash = (car.squash + car.squash_v * dt).clamp(-0.2, 0.12);
-    // Lifted for the pose it has now, not the one it eases toward, so no
-    // wheel dips into the road while it catches up over a crest.
-    body.car.rise = if body.car.air { 0.0 } else { lift(track, body) };
+    match tilt {
+        Some(tilt) => rest_on_ground(track, body, tilt.ground),
+        None => body.car.rise = 0.0,
+    }
+}
+
+/// Keep a car's body, tilted as posed, within reach of the ground (whose own
+/// pitch and lean under the wheels are `ground`), then lift it so no wheel is
+/// under the road. Lifted for the pose it has now, not the one it eases
+/// toward, so no wheel dips into the road while it catches up over a crest.
+pub fn rest_on_ground(track: &Track, body: &mut Body, ground: (f32, f32)) {
+    let (along, across) = ground;
+    let car = &mut body.car;
+    // No further from the ground than the wheels can drop to reach it
+    // (with 8 cm to spare for each car's own wheel places): down a steep
+    // hill in a corner, or landing nose up on a descent, the body comes
+    // back toward the road.
+    let (pitch, lean) = (car.pitch - along, car.lean - across);
+    let reach = WHEELBASE * pitch.abs() + 2.0 * WHEEL_SPREAD * lean.abs();
+    let k = ((DROOP - 0.08) / reach.max(1e-6)).min(1.0);
+    (car.pitch, car.lean) = (along + pitch * k, across + lean * k);
+    // That takes the ground for a plane. Out at the edge of the run-off it
+    // bends into the land, so check the corner wheels themselves and, while
+    // the highest can't reach, come closer to the ground under those four
+    // (2 cm more to spare: on curved ground the outermost wheel places stand
+    // a little higher).
+    let reach = DROOP - 0.1;
+    let (along, across) = corner_tilt(track, body);
+    for _ in 0..4 {
+        let under = under_wheels(track, body);
+        let hang = under.iter().fold(f32::MIN, |a, b| a.max(*b)) - under.iter().fold(f32::MAX, |a, b| a.min(*b));
+        if hang <= reach {
+            break;
+        }
+        let car = &mut body.car;
+        let k = reach / hang;
+        (car.pitch, car.lean) = (along + (car.pitch - along) * k, across + (car.lean - across) * k);
+    }
+    body.car.rise = lift(track, body);
+}
+
+/// The pitch and lean of the ground under a car's four corner wheels.
+fn corner_tilt(track: &Track, body: &Body) -> (f32, f32) {
+    let (s, c) = math::sin_cos(body.car.heading);
+    let (f, l) = (Vec2::new(c, s) * (WHEELBASE / 2.0), Vec2::new(-s, c) * WHEEL_SPREAD);
+    let h = |d: Vec2| track.height(body.p + d, body.car.idx as usize);
+    let (fl, fr, rl, rr) = (h(f + l), h(f - l), h(-f + l), h(-f - l));
+    (
+        math::atan((fl + fr - rl - rr) / 2.0 / WHEELBASE),
+        -math::atan((fl + rl - fr - rr) / 2.0 / (2.0 * WHEEL_SPREAD)),
+    )
 }
 
 /// Update the car's nearest sample, offset and surface, and count crossings.

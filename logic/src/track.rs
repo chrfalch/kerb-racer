@@ -14,6 +14,11 @@ pub const WALL: f32 = HALF + 5.4;
 pub const LINE_EDGE: f32 = HALF - 1.0;
 /// The outer edge of the kerb's raised top, inward from the asphalt edge (m).
 pub const KERB_IN: f32 = 0.15;
+/// Over a crest the springs throw the cars off, and for `LANDING` metres past
+/// its foot, the racing line keeps this far from the centre at most: nothing
+/// steers in the air, so a car flying off the edge would land beside the road.
+pub const JUMP_EDGE: f32 = HALF - 2.2;
+pub const LANDING: f32 = 12.0;
 /// Lateral grip the planner assumes on asphalt (m/s²); the cars have a little more.
 pub const PLAN_GRIP: f32 = 14.5;
 /// Deceleration the planner allows itself when braking for a corner.
@@ -282,6 +287,10 @@ pub struct Track {
     pub vbend: Vec<f32>,
     /// Cross-slope: height gained per metre to the left.
     pub bank: Vec<f32>,
+    /// Over the top of a crest (its convex part), how sharp the crest is: its
+    /// vertical curvature where the climb ends (1/m); 0 elsewhere. The springs
+    /// throw a car off the sharpest (see `car::rebound`).
+    pub spring: Vec<f32>,
     /// Kerbs line both edges here (asphalt tracks' real corners only).
     pub kerb: Vec<bool>,
     /// How far from the centreline a car may be steered here: out to the
@@ -531,6 +540,68 @@ pub fn lift_height(lifts: &[Lift], s: f32) -> f32 {
     y
 }
 
+/// The sharpness of the crest whose top is `s` metres past the start line
+/// (see `Track::spring`): the half-cosine climb's curvature at its end, over
+/// the convex half of the climb and of the drop.
+fn lift_spring(lifts: &[Lift], s: f32) -> f32 {
+    lifts
+        .iter()
+        .map(|lift| match *lift {
+            Lift::Crest { at, up, down, h } if h > 0.0 && (at + up / 2.0..=at + up + down / 2.0).contains(&s) => {
+                sharpness(h, up)
+            }
+            _ => 0.0,
+        })
+        .fold(0.0, f32::max)
+}
+
+/// A crest's vertical curvature (1/m) where its half-cosine climb of `h` over
+/// `up` metres ends.
+fn sharpness(h: f32, up: f32) -> f32 {
+    h * std::f32::consts::PI * std::f32::consts::PI / (2.0 * up * up)
+}
+
+/// Whether `s` metres past the start line is on a crest the springs throw
+/// the cars off, or within `LANDING` past its foot, where they come down.
+fn over_jump(lifts: &[Lift], s: f32) -> bool {
+    lifts.iter().any(|lift| match *lift {
+        Lift::Crest { at, up, down, h } => {
+            h > 0.0 && crate::car::springiness(sharpness(h, up)) > 0.0 && (at..=at + up + down + LANDING).contains(&s)
+        }
+        _ => false,
+    })
+}
+
+/// Each springy crest the cars are thrown off at the planned `speed` (see
+/// `car::rebound`): the sample at its top, the one it lands by, and how hard
+/// (m/s) it comes down, flying over the authored centreline.
+fn jumps(lifts: &[Lift], spring: &[f32], grade: &[f32], speed: &[f32], step: f32) -> Vec<(usize, usize, f32)> {
+    let n = spring.len();
+    let height = |s: f32| lift_height(lifts, s);
+    (0..n)
+        .filter(|&i| spring[i] > 0.0 && grade[i] > 0.0 && grade[(i + 1) % n] <= 0.0)
+        .filter_map(|top| {
+            let v = speed[top];
+            let throw = crate::car::rebound(spring[top], v);
+            (throw > 0.0).then(|| {
+                let from = top as f32 * step;
+                let dt = 1.0 / 240.0;
+                let (mut x, mut y, mut vy) = (0.0, height(from), throw);
+                loop {
+                    x += v * dt;
+                    vy -= G * dt;
+                    y += vy * dt;
+                    if y <= height(from + x) {
+                        break;
+                    }
+                }
+                let under = (height(from + x + 0.25) - height(from + x - 0.25)) / 0.5 * v;
+                (top, top + (x / step).ceil() as usize, (under - vy).max(0.0))
+            })
+        })
+        .collect()
+}
+
 /// The authored banking `s` metres past the start line (rise per metre toward the outside).
 fn lift_bank(lifts: &[Lift], s: f32) -> f32 {
     let mut bank = 0.0;
@@ -706,8 +777,11 @@ pub fn build(id: u32) -> Track {
     // edges rise and fall too sharply to take at speed.
     let edge: Vec<f32> = (0..n)
         .map(|i| {
-            if lift_bank(layout(id).lifts, i as f32 * step) != 0.0 {
+            let s = i as f32 * step;
+            if lift_bank(layout(id).lifts, s) != 0.0 {
                 HALF - 1.3
+            } else if over_jump(layout(id).lifts, s) {
+                JUMP_EDGE
             } else {
                 LINE_EDGE
             }
@@ -770,6 +844,7 @@ pub fn build(id: u32) -> Track {
             -lift_bank(lifts, i as f32 * step) * turn.signum()
         })
         .collect();
+    let spring: Vec<f32> = (0..n).map(|i| lift_spring(lifts, i as f32 * step)).collect();
 
     // Kerbs on both sides of every real corner; a dirt road has none.
     let kerb: Vec<bool> = (0..n)
@@ -835,11 +910,36 @@ pub fn build(id: u32) -> Track {
             speed[i] = speed[i].min(takeoff * 0.97);
         }
     }
+    // Off a springy crest nothing brakes the car until it lands. Flying
+    // straight, it misses the road's turn (the centreline's, however the line
+    // ran), so once down, with its grip cut, it must make that up while the
+    // shake fades, on top of the racing line's own curve there.
+    let rough = if dirt { crate::car::ROUGH } else { 1.0 };
+    let line_bend = |i: usize| {
+        let r = radius(path[(i + n - 5) % n], path[i], path[(i + 5) % n]);
+        if r.is_finite() { 1.0 / r } else { 0.0 }
+    };
+    let mut airborne = vec![false; n];
+    for (top, land, impact) in jumps(lifts, &spring, &grade, &speed, step) {
+        for k in top..=land {
+            airborne[k % n] = true;
+        }
+        let shaken = crate::car::shaken_by(impact, rough);
+        let fade = (shaken / crate::car::SHAKEN_FADE * speed[top] / step) as usize + 1;
+        let missed = (top..land).map(|k| bend[k % n] * step).sum::<f32>().abs() / (fade as f32 * step);
+        for k in 0..fade {
+            let left = shaken * (1.0 - k as f32 / fade as f32);
+            let grip = PLAN_GRIP * feel * (1.0 - crate::car::SHAKEN_GRIP * left);
+            let j = (land + k) % n;
+            let turn = missed + line_bend(j).abs();
+            speed[j] = speed[j].min(math::sqrt(grip / turn.max(1e-4)));
+        }
+    }
     // Braking takes longer downhill and less up.
     for _ in 0..2 {
         for i in (0..n).rev() {
             let next = speed[(i + 1) % n];
-            let decel = (PLAN_BRAKE * feel + G * grade[i]).max(2.0);
+            let decel = if airborne[i] { 0.0 } else { (PLAN_BRAKE * feel + G * grade[i]).max(2.0) };
             let reachable = math::sqrt(next * next + 2. * decel * step);
             speed[i] = speed[i].min(reachable);
         }
@@ -885,6 +985,7 @@ pub fn build(id: u32) -> Track {
         grade,
         vbend,
         bank,
+        spring,
         kerb,
         edge,
         reach_left,

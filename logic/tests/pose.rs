@@ -127,6 +127,80 @@ fn the_wheels_stay_on_the_road_as_the_body_tilts() {
     }
 }
 
+/// A body diving and rolling as hard as it ever does, either way, out on the
+/// run-off at the samples `along`: its outer wheels where the ground bends
+/// from the road into the land. How deep any wheel goes into the ground and
+/// how high one is left above it (m), and where (m into the lap, offset).
+fn hard_corners(t: &Track, along: impl Iterator<Item = usize>) -> (f32, f32, (f32, f32)) {
+    let wheels = [(0.908, 0.72), (-0.862, -0.72), (0.949, 0.75), (-0.906, -0.75), (0.976, -0.731), (-0.944, 0.731)];
+    let (mut sink, mut float, mut at) = (0f32, 0f32, (0.0, 0.0));
+    for i in along {
+        let f = t.tangent(i);
+        let heading = f.y.atan2(f.x);
+        // Wherever the car itself is on the road's own plane: inside a
+        // hairpin tighter than the band that ends short of the run-off.
+        for lat in [-6.0f32, -5.5, -5.0, 5.0, 5.5, 6.0] {
+            if lat.abs() > if lat > 0.0 { t.reach_left[i] } else { t.reach_right[i] } {
+                continue;
+            }
+            let p = t.at(i, lat);
+            let tilt = car::ground_tilt(t, p, i, heading);
+            for (dive, roll) in [(-0.07, -0.08), (-0.07, 0.08), (0.03, -0.08), (0.03, 0.08)] {
+                let mut body = Body {
+                    car: Car { idx: i as u32, heading, pitch: tilt.pitch + dive, lean: tilt.lean + roll, y: t.surface(p, i), ..Car::default() },
+                    p,
+                };
+                car::rest_on_ground(t, &mut body, tilt.ground);
+                let base = Vec3::new(p.x, body.car.y + body.car.rise, p.y);
+                let rot = car::body_rotation(&body.car);
+                for (along, across) in wheels {
+                    let hang = car::wheel_drop(t, &body, Vec2::new(along, across));
+                    let contact = base + rot * Vec3::new(along, -hang, across);
+                    let gap = contact.y - t.height(Vec2::new(contact.x, contact.z), i);
+                    if gap > float {
+                        at = (i as f32 * t.step, lat);
+                    }
+                    (sink, float) = (sink.min(gap), float.max(gap));
+                }
+            }
+        }
+    }
+    (sink, float, at)
+}
+
+/// On Gravel Pit's run-off down into the pit, a body diving and rolling as
+/// hard as it ever does still reaches the ground with every wheel. (Cornering
+/// hard across it, the player's car once drew a wheel 5 cm up.)
+#[test]
+fn the_wheels_reach_the_run_off_in_a_hard_corner() {
+    let t = track::build(3);
+    let (sink, float, at) = hard_corners(&t, (0..48).map(|k| ((138.0 + k as f32 * 0.25) / t.step) as usize));
+    println!("Gravel Pit's pit run-off: wheels at most {:.3} m into the ground, {float:.3} m above it (at {at:?})", -sink);
+    assert!(float < 0.02, "a wheel {float:.3} m above the ground at {at:?}");
+}
+
+/// All round every track's run-off, no wheel is left more than 3.5 cm above
+/// the ground. Before each wheel's reach was checked they hung up to 0.08 m
+/// (Fern Loop), 0.09 m (Misty Moor), 0.27 m (Gravel Pit's berm) and 0.28 m
+/// (Kerb Ring's off-camber descent). What is left, at most 0.033 m on Gravel
+/// Pit's berm, comes from each car's own wheel places standing a little
+/// beyond the corners the reach is checked at. Out there a wheel can also be
+/// drawn up to 0.1 m into the ground, for the same reason; not checked here.
+#[test]
+fn the_wheels_reach_every_run_off_in_a_hard_corner() {
+    let mut high = Vec::new();
+    for id in 0..track::LAYOUTS.len() as u32 {
+        let t = track::build(id);
+        let samples = (0..(t.length() * 2.0) as usize).map(|k| ((k as f32 * 0.5 / t.step) as usize).min(t.len() - 1));
+        let (sink, float, at) = hard_corners(&t, samples);
+        println!("{}: wheels at most {:.3} m into the ground, {float:.3} m above it (at {at:?})", track::layout(id).name, -sink);
+        if float >= 0.035 {
+            high.push(format!("{}: a wheel {float:.3} m above the ground at {at:?}", track::layout(id).name));
+        }
+    }
+    assert!(high.is_empty(), "{}", high.join("\n"));
+}
+
 fn race(track: u32) -> Sim<KerbRacers> {
     let mut sim = Sim::<KerbRacers>::new(Options { track, ..Options::default() }).unwrap();
     let assets = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/");
@@ -179,8 +253,6 @@ struct Ride {
     descent: f32,
     climb_mean: f32,
     descent_mean: f32,
-    /// The steepest pitch either way over Gravel Pit's whoops (°).
-    whoops: f32,
     /// The deepest any wheel went into the road, and the highest above it (m).
     sink: f32,
     float: f32,
@@ -203,14 +275,11 @@ fn ride(track: u32) -> Ride {
             continue;
         }
         let i = c.idx as usize;
-        let (pitch, grade, s) = (c.pitch.to_degrees(), t.grade[i], i as f32 * t.step);
+        let (pitch, grade) = (c.pitch.to_degrees(), t.grade[i]);
         if grade > 0.1 {
             up.push(pitch);
         } else if grade < -0.1 {
             down.push(pitch);
-        }
-        if t.dirt && (4.0..34.0).contains(&s) {
-            ride.whoops = ride.whoops.max(pitch.abs());
         }
         // The wheels as drawn: under the body, each dropped to the road.
         let pose = *w.require::<exact_game::Transform>("player");
@@ -263,11 +332,54 @@ fn the_wheels_stay_on_the_road_in_a_race() {
     }
 }
 
-/// Gravel Pit's whoops already rock the car: tilting harder down hills must
-/// not make them busier. 10.2° is their steepest before that change.
+/// The body's steepest pitch (°, either way) on the ground over Gravel Pit's
+/// whoops, coasting into them from 8 m before the line at `speed` on the
+/// racing line.
+fn whoops_pitch(t: &Track, speed: f32) -> f32 {
+    let i = t.wrap(-(8.0 / t.step) as i64);
+    let p = t.at(i, t.line[i]);
+    let f = t.tangent(i);
+    let mut body = Body {
+        car: Car {
+            idx: i as u32,
+            heading: f.y.atan2(f.x),
+            vx: f.x * speed,
+            vz: f.y * speed,
+            y: t.surface(p, i),
+            vy: t.grade[i] * speed,
+            load: 1.0,
+            skill: 1.0,
+            ..Car::default()
+        },
+        p,
+    };
+    car::locate(t, &mut body);
+    let mut steepest = 0f32;
+    for _ in 0..(120 * 6) {
+        car::step(t, &mut body, 1.0 / 120.0);
+        let s = body.car.idx as f32 * t.step;
+        if (34.0..t.length() / 2.0).contains(&s) {
+            break;
+        }
+        if (4.0..34.0).contains(&s) && !body.car.air && body.car.air_ticks == 0 {
+            steepest = steepest.max(body.car.pitch.to_degrees().abs());
+        }
+    }
+    steepest
+}
+
+/// Gravel Pit's whoops already rock the car: they must not get busier at any
+/// speed they are taken at. The limits are each speed's steepest before the
+/// springy crests, less than a tenth of a degree over: the racing line out of
+/// the last jump's landing runs a little differently into them, which reads
+/// up to 0.06° steeper. (The race that used to guard this measured traffic:
+/// a lap entered faster reads steeper whatever the pose does.)
 #[test]
 fn the_whoops_rock_no_harder() {
-    let r = ride(3);
-    println!("Gravel Pit's whoops: up to {:.1}°", r.whoops);
-    assert!(r.whoops <= 10.2, "the whoops rock {:.1}°", r.whoops);
+    let t = track::build(3);
+    for (speed, before) in [(10.0, 12.28), (12.0, 12.74), (14.0, 12.02), (16.0, 11.56), (18.0, 11.44), (20.0, 11.19)] {
+        let pitch = whoops_pitch(&t, speed);
+        println!("Gravel Pit's whoops at {speed} m/s: up to {pitch:.2}° (before {before:.2}°)");
+        assert!(pitch <= before + 0.1, "at {speed} m/s the whoops rock {pitch:.2}°, before {before:.2}°");
+    }
 }
