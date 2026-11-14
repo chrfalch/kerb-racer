@@ -207,10 +207,6 @@ pub struct Hud {
     pub speed: u32,
     pub gas: bool,
     pub brake: bool,
-    /// The player's car is in the air off a jump.
-    pub air: bool,
-    /// The player's car is in another's slipstream.
-    pub draft: bool,
     pub off: bool,
     pub standings: Vec<Row>,
     pub radar: Radar,
@@ -1315,8 +1311,6 @@ fn hud(w: &World) {
         speed: (speed * 3.6).round() as u32,
         gas: player.gas > 0.0,
         brake: player.brake,
-        air: player.air && player.air_ticks >= car::JUMP_TICKS,
-        draft: player.draft > 0.45 && speed > 12.0,
         off: player.surface == car::GRASS,
         standings: rows,
         radar,
