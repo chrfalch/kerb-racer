@@ -152,7 +152,7 @@ const SPATIAL: Spatial = Spatial {
 pub struct Engine {
     pub gear: u32,
     pub rpm: f32,
-    /// 0 coasting to 1 pulling, smoothed.
+    /// 0 coasting to 1 pulling, smoothed; past 1 labouring up a hill.
     pub load: f32,
     /// Seconds of ignition cut left in a gear change.
     pub cut: f32,
@@ -262,8 +262,16 @@ pub fn setup(w: &mut World, cars: &[(u32, Entity)], dirt: bool) {
     }
 }
 
-/// Move the engine one tick: blipped on the grid, through the gears in the race.
-pub fn rev(e: &mut Engine, car: &Car, racing: bool, dt: f32) {
+/// How much a climb raises a pulling engine's load per unit of grade, and the
+/// most it raises or lowers it, as shares of the throttle: flat out up a hill
+/// the engine labours past full load.
+const CLIMB_LOAD: f32 = 1.6;
+const CLIMB_MOST: f32 = 0.3;
+
+/// Move the engine one tick: blipped on the grid, through the gears in the
+/// race, labouring up a `climb` (the road's rise per metre along the car's
+/// heading) and easing down one.
+pub fn rev(e: &mut Engine, car: &Car, climb: f32, racing: bool, dt: f32) {
     let gas = if car.brake { 0.0 } else { car.gas };
     if !racing {
         // On the grid: the clutch is in and the throttle is a blip.
@@ -292,7 +300,12 @@ pub fn rev(e: &mut Engine, car: &Car, racing: bool, dt: f32) {
     let target = target.clamp(IDLE, REDLINE);
     e.rpm += (target - e.rpm) * (1.0 - math::exp(-dt / 0.045));
     e.cut = (e.cut - dt).max(0.0);
-    let load = if e.cut > 0.0 { 0.0 } else { gas };
+    // Off the throttle a hill changes nothing: only a pulling engine feels it.
+    let load = if e.cut > 0.0 {
+        0.0
+    } else {
+        gas * (1.0 + (climb * CLIMB_LOAD).clamp(-CLIMB_MOST, CLIMB_MOST))
+    };
     e.load += (load - e.load) * (1.0 - math::exp(-dt / 0.06));
 }
 
@@ -327,7 +340,8 @@ fn slot_target(slot: &Slot, e: &Engine, level: f32) -> (u32, f32) {
         // A rival's single set: a little quieter off the throttle.
         0.7 + 0.3 * e.load
     } else if slot.on {
-        math::sin(q)
+        // Labouring past full load, the pulling set plays louder still.
+        math::sin(q) * e.load.max(1.0)
     } else {
         math::cos(q)
     };
@@ -401,7 +415,10 @@ pub fn tick(w: &mut World, now: u64, start: u64, volume: f32) {
     let mut engines = [Engine::default(); crate::DRIVERS.len()];
     for (e, car, pos) in &cars {
         let mut engine = *w.require::<Engine>(*e);
-        rev(&mut engine, car, racing, dt);
+        let i = car.idx as usize;
+        let (s, c) = math::sin_cos(car.heading);
+        let climb = t.grade[i] * t.tangent(i).dot(Vec2::new(c, s));
+        rev(&mut engine, car, climb, racing, dt);
         let speed = Vec2::new(car.vx, car.vz).length();
         // A knock: another car, the fence, or coming down off a crest; light to heavy.
         let knock = car.knock.max(car.landing * 1.5);
@@ -418,7 +435,6 @@ pub fn tick(w: &mut World, now: u64, start: u64, volume: f32) {
         }
         if car.id == crate::PLAYER {
             // Over a kerb: a knock for every red block under a wheel.
-            let i = car.idx as usize;
             let side = car.side.abs();
             let on_kerb = kerbed(&t, i) && side + 0.8 > HALF - 0.15 && side - 0.8 < HALF + 0.6;
             let block = (i as f32 * t.step) as i32;

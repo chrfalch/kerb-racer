@@ -121,6 +121,27 @@ impl Builder {
         }
         self.m.indices.extend(order.map(|k| base + k));
     }
+    /// An upward strip of quads between two rows of points that share their
+    /// corners: each row is (one side, the other side, the normal there).
+    pub fn strip(&mut self, rows: &[(Vec3, Vec3, Vec3)], color: [f32; 4]) {
+        let base = (self.m.positions.len() / 3) as u32;
+        for &(a, b, n) in rows {
+            for p in [a, b] {
+                self.m.positions.extend([p.x, p.y, p.z]);
+                self.m.normals.extend([n.x, n.y, n.z]);
+                self.m.uvs.extend([0.0, 0.0]);
+                self.m.colors.extend(color);
+                self.lo = self.lo.min(p);
+                self.hi = self.hi.max(p);
+            }
+        }
+        for (k, w) in rows.windows(2).enumerate() {
+            let [a0, b0, a1, b1] = [0, 1, 2, 3].map(|c| base + 2 * k as u32 + c);
+            let up = (w[0].1 - w[0].0).cross(w[1].1 - w[0].0).y >= 0.0;
+            let order = if up { [a0, b0, b1, a0, b1, a1] } else { [a0, b1, b0, a0, a1, b1] };
+            self.m.indices.extend(order);
+        }
+    }
     pub fn quad_up(&mut self, a: Vec3, b: Vec3, c: Vec3, d: Vec3, color: [f32; 4]) {
         self.tri(a, b, c, color);
         self.tri(a, c, d, color);
@@ -642,6 +663,52 @@ fn start_line(paint: &mut Builder, t: &Track) {
     }
 }
 
+/// The smooth centreline `s` metres past the start line: a cubic between the
+/// samples either side that leaves each along the road's heading, so it bends
+/// with the road between them rather than cutting across. Its point and its
+/// unit left normal.
+fn centreline(t: &Track, s: f32) -> (Vec2, Vec2) {
+    let x = s / t.step;
+    let k = math::floor(x);
+    let (i, j) = (t.wrap(k as i64), t.wrap(k as i64 + 1));
+    let (p0, p1) = (t.centre(i), t.centre(j));
+    let (m0, m1) = (t.tangent(i) * t.step, t.tangent(j) * t.step);
+    let u = x - k;
+    let (u2, u3) = (u * u, u * u * u);
+    let at = p0 * (2. * u3 - 3. * u2 + 1.) + m0 * (u3 - 2. * u2 + u) + p1 * (3. * u2 - 2. * u3) + m1 * (u3 - u2);
+    let dir = p0 * (6. * u2 - 6. * u) + m0 * (3. * u2 - 4. * u + 1.) + p1 * (6. * u - 6. * u2) + m1 * (3. * u2 - 2. * u);
+    let dir = dir.normalize();
+    (at, Vec2::new(-dir.y, dir.x))
+}
+
+/// A dashed line down the middle of the road, 1.2 m painted and 1.8 m clear,
+/// stretched a little so the lap closes on whole dashes with the start line in
+/// a gap. Each dash is cut into pieces no longer than 15 cm along the smooth
+/// centreline, so it curves with a hairpin and lies on the road over a crest.
+fn centre_line(paint: &mut Builder, t: &Track, color: [f32; 4]) {
+    const WIDTH: f32 = 0.14;
+    let dashes = (t.length() / 3.0).round().max(1.0);
+    let period = t.length() / dashes;
+    let dash = period * 0.4;
+    let pieces = (dash / 0.15).ceil() as u32;
+    let row = |s: f32| {
+        let (c, left) = centreline(t, s);
+        let (i, _) = t.locate(c, t.wrap((s / t.step) as i64), 2);
+        let g = t.gradient(c, i);
+        let up = Vec3::new(-g.x, 1.0, -g.y).normalize();
+        let side = |lat: f32| {
+            let p = c + left * lat;
+            v3(p, t.surface(p, i) + 0.05)
+        };
+        (side(-WIDTH / 2.0), side(WIDTH / 2.0), up)
+    };
+    for d in 0..dashes as u32 {
+        let from = (d as f32 + 0.5) * period - dash / 2.0;
+        let rows: Vec<_> = (0..=pieces).map(|k| row(from + dash * k as f32 / pieces as f32)).collect();
+        paint.strip(&rows, color);
+    }
+}
+
 /// The road: clay run-off and asphalt (textured), then edge lines, kerbs and
 /// the start line. A dirt track gets `dirt_road` instead.
 pub fn road(t: &Track) -> Model {
@@ -700,6 +767,7 @@ pub fn road(t: &Track) -> Model {
             |_| Some(white),
         );
     }
+    centre_line(&mut paint, t, white);
     // Kerbs on both sides of every real corner: raised red and white blocks about
     // a metre long, ramped on both edges so they catch the light like the real thing.
     let red = hex(0xd83a2e);

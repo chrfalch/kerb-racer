@@ -117,6 +117,10 @@ pub struct Car {
     pub lean: f32,
     pub squash: f32,
     pub squash_v: f32,
+    /// How far the body is drawn above `y` so its tilt with the ground leaves
+    /// no wheel under the road (see `lift`). For drawing only, like the
+    /// tilt: nothing steps on it.
+    pub rise: f32,
     /// The car being passed (its id + 1; 0 for none), and which side of it
     /// this car goes by (1 left, -1 right), held until it is clear.
     pub pass: u32,
@@ -672,7 +676,7 @@ fn vertical(track: &Track, body: &mut Body, slope: Vec2, dt: f32) {
         }
     }
     car.shaken = (car.shaken - dt * 1.6).max(0.0);
-    pose(car, slope, dt);
+    pose(track, body, dt);
 }
 
 /// Body pitch (radians) per m/s² of forward acceleration, and roll per m/s²
@@ -680,34 +684,137 @@ fn vertical(track: &Track, body: &mut Body, slope: Vec2, dt: f32) {
 pub const PITCH_PER_G: f32 = 0.0022;
 pub const ROLL_PER_G: f32 = 0.0036;
 
-/// The body's tilt and suspension, for drawing: lie along the ground, lift
-/// the nose a little with the flight path, squash on landings.
-fn pose(car: &mut Car, slope: Vec2, dt: f32) {
-    let (s, c) = math::sin_cos(car.heading);
+/// Half the distance between the centres of a car's left and right wheels
+/// (every car's is within 2 cm of it, see `wheel_layout`).
+const WHEEL_SPREAD: f32 = 0.74;
+/// From 30 m up a true 8° hill hardly tilts a car, so the body pitches and
+/// leans this much more than the ground under its wheels. Its high wheels
+/// drop to the road on their springs (`wheel_drop`).
+const TILT: f32 = 1.5;
+/// The camera looks down on the car from high behind, so a nose pitched down
+/// shows less than the same angle pitched up; down a hill the body points
+/// this much further down again. The hill is read over 10 m, so short bumps (Gravel Pit's
+/// whoops) add nothing.
+const DOWNHILL: f32 = 0.5;
+/// The most the body pitches (nose down, nose up) and leans (rad).
+const PITCH_MOST: (f32, f32) = (-0.3, 0.26);
+const LEAN_MOST: f32 = 0.2;
+/// How far a wheel can hang below its place on the body (m).
+pub const DROOP: f32 = 0.35;
+
+/// The body's orientation as drawn: its heading, then pitch, then lean.
+pub fn body_rotation(car: &Car) -> Quat {
+    tilted(car.heading, car.pitch, car.lean)
+}
+
+/// How far the wheel at `at` on the body (forward, left; m) hangs below its
+/// place to reach the road: none in the air, at most `DROOP`.
+pub fn wheel_drop(track: &Track, body: &Body, at: Vec2) -> f32 {
+    let car = &body.car;
+    if car.air {
+        return 0.0;
+    }
+    let base = Vec3::new(body.p.x, car.y + car.squash + car.rise, body.p.y);
+    // The wheels hang `squash` below the body (see `turn_wheels`).
+    let contact = base + body_rotation(car) * Vec3::new(at.x, -car.squash, at.y);
+    let clear = contact.y - track.height(Vec2::new(contact.x, contact.z), car.idx as usize);
+    clear.clamp(0.0, DROOP)
+}
+
+/// A body facing `heading`, pitched nose up by `pitch`, then leaned by `lean`.
+pub fn tilted(heading: f32, pitch: f32, lean: f32) -> Quat {
+    Quat::from_rotation_y(-heading) * Quat::from_rotation_z(pitch) * Quat::from_rotation_x(lean)
+}
+
+/// How a car tilts with the ground under it (see `ground_tilt`).
+#[derive(Clone, Copy, Debug)]
+pub struct Tilt {
+    pub pitch: f32,
+    pub lean: f32,
+    /// The ground's own pitch and lean under the wheels.
+    pub ground: (f32, f32),
+    /// How steeply it is heading down a hill, not a bump (rad, 0 or less).
+    pub downhill: f32,
+}
+
+/// How a car at `p` facing `heading` tilts with the ground under its four
+/// wheels, exaggerated (see `TILT` and `DOWNHILL`).
+pub fn ground_tilt(track: &Track, p: Vec2, idx: usize, heading: f32) -> Tilt {
+    let (s, c) = math::sin_cos(heading);
     let (f, l) = (Vec2::new(c, s), Vec2::new(-s, c));
+    let rise = |d: Vec2| track.height(p + d, idx) - track.height(p - d, idx);
+    let under = math::atan(rise(f * (WHEELBASE / 2.0)) / WHEELBASE);
+    // The slope over 10 m and over 6 m, averaged: waves of 4 to 8 m cancel out.
+    let hill = math::atan((rise(f * 5.0) / 10.0 + rise(f * 3.0) / 6.0) / 2.0);
+    // Down a hill only while the wheels are on it too: the 10 m reading sees
+    // a descent before its crest and after its dip. Slopes under 3% are no
+    // hill: the whoops rise and fall that much as a whole.
+    let downhill = (hill.max(under) + 0.03).min(0.0);
+    let lean = -math::atan(rise(l * WHEEL_SPREAD) / (2.0 * WHEEL_SPREAD));
+    Tilt {
+        pitch: (under * TILT + downhill * DOWNHILL).clamp(PITCH_MOST.0, PITCH_MOST.1),
+        lean: (lean * TILT).clamp(-LEAN_MOST, LEAN_MOST),
+        ground: (under, lean),
+        downhill,
+    }
+}
+
+/// How far the body, as posed, must rise above `y` for no wheel to be under
+/// the road.
+pub fn lift(track: &Track, body: &Body) -> f32 {
+    let car = &body.car;
+    let rot = body_rotation(car);
+    [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)]
+        .map(|(along, across)| {
+            // The wheels hang `squash` below the body (see `turn_wheels`).
+            let at = rot * Vec3::new(along * WHEELBASE / 2.0, -car.squash, across * WHEEL_SPREAD);
+            track.height(body.p + Vec2::new(at.x, at.z), car.idx as usize) - (car.y + car.squash + at.y)
+        })
+        .into_iter()
+        .fold(0.0, f32::max)
+}
+
+/// The body's tilt and suspension, for drawing: lie along the ground under
+/// the wheels, lift the nose a little with the flight path, squash on landings.
+fn pose(track: &Track, body: &mut Body, dt: f32) {
+    let (p, idx) = (body.p, body.car.idx as usize);
+    let car = &mut body.car;
     let speed = Vec2::new(car.vx, car.vz).length();
-    let (pitch, lean, rate) = if car.air {
-        (math::atan(car.vy / speed.max(4.0)) * 0.5, 0.0, 3.0)
-    } else {
-        (math::atan(slope.dot(f)), -math::atan(slope.dot(l)), 14.0)
-    };
-    // Weight transfer on the springs: the nose dives under braking and lifts
-    // under power, the body rolls toward the outside of a corner.
-    let (pitch, lean) = if car.air {
-        (pitch, lean)
-    } else {
-        (
-            pitch + (car.accel * PITCH_PER_G).clamp(-0.07, 0.03),
-            lean - (car.lateral * ROLL_PER_G).clamp(-0.08, 0.08),
-        )
+    let tilt = (!car.air).then(|| ground_tilt(track, p, idx, car.heading));
+    let (pitch, lean, rate) = match tilt {
+        None => (math::atan(car.vy / speed.max(4.0)) * 0.5, 0.0, 3.0),
+        Some(tilt) => {
+            // Weight transfer on the springs: the nose dives under braking and
+            // lifts under power (but not while it points down a hill), the
+            // body rolls toward the outside of a corner.
+            let squat = (0.03 + tilt.downhill).clamp(0.0, 0.03);
+            (
+                tilt.pitch + (car.accel * PITCH_PER_G).clamp(-0.07, squat),
+                tilt.lean - (car.lateral * ROLL_PER_G).clamp(-0.08, 0.08),
+                14.0,
+            )
+        }
     };
     let k = (dt * rate).min(1.0);
     car.pitch += (pitch - car.pitch) * k;
     car.lean += (lean - car.lean) * k;
+    if let Some(Tilt { ground: (along, across), .. }) = tilt {
+        // No further from the ground than the wheels can drop to reach it
+        // (with 8 cm to spare for each car's own wheel places): down a steep
+        // hill in a corner, or landing nose up on a descent, the body comes
+        // back toward the road.
+        let (pitch, lean) = (car.pitch - along, car.lean - across);
+        let reach = WHEELBASE * pitch.abs() + 2.0 * WHEEL_SPREAD * lean.abs();
+        let k = ((DROOP - 0.08) / reach.max(1e-6)).min(1.0);
+        (car.pitch, car.lean) = (along + pitch * k, across + lean * k);
+    }
     // A spring settling where the load puts it.
     let rest = -(car.load - 1.0) * 0.06;
     car.squash_v += (-180.0 * (car.squash - rest) - 13.0 * car.squash_v) * dt;
     car.squash = (car.squash + car.squash_v * dt).clamp(-0.2, 0.12);
+    // Lifted for the pose it has now, not the one it eases toward, so no
+    // wheel dips into the road while it catches up over a crest.
+    body.car.rise = if body.car.air { 0.0 } else { lift(track, body) };
 }
 
 /// Update the car's nearest sample, offset and surface, and count crossings.
