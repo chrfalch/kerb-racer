@@ -14,6 +14,9 @@ pub const SKID_EVERY: f32 = 0.9;
 pub const GUIDES: usize = 10;
 pub const GUIDE_FROM: f32 = 6.0;
 pub const GUIDE_EVERY: f32 = 3.2;
+/// The arrow beside the player's car for the side the planner passes on:
+/// off in play, kept for debugging the planner.
+pub const SIDE_ARROW: bool = false;
 
 /// The ring of skid marks: which one goes down next.
 #[derive(Clone, Debug, Default, Resource)]
@@ -207,7 +210,7 @@ pub fn guide_cue(t: &Track, need: f32) -> Cue {
 /// where it has to be off the gas now; and the arrow on the side it will pass.
 pub fn player(w: &mut World, t: &Track, body: &Body, assist: u32) {
     let car = &body.car;
-    let side = if car.pass != 0 { car.pass_side } else { 0.0 };
+    let side = if SIDE_ARROW && car.pass != 0 { car.pass_side } else { 0.0 };
     show(w, "side-arrow", side != 0.0 && !car.finished);
     if side != 0.0 {
         // The car's local +Z is the road's positive side.
