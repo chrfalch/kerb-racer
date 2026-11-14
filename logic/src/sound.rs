@@ -1,80 +1,106 @@
-//! The race's sound: every car's engine, the player's tyres and kerbs, knocks
-//! between cars and off the fence, the countdown, the lap and flag stings, and
-//! the music. The recordings come from infinite-driver's banks
-//! (`art/src/sounds.py`); the music and stings are composed in `art/src/music.py`.
+//! The race's sound: every car's engine and its overrun pops, the player's
+//! tyres and kerbs, knocks between cars and off the fence, the countdown, the
+//! lap and flag stings, and the music. The engines are synthesized in
+//! `art/src/engines.py`, the foley comes from infinite-driver's banks
+//! (`art/src/sounds.py`), and the music and stings are composed in
+//! `art/src/music.py`.
 //!
-//! An engine is a bank of recorded loops of a real V8 held at steady rpm, on
-//! load (pulling) and off load (coasting). A voice here plays at one fixed rate,
-//! so the bank is a close grid of rpms and the engine crossfades the two either
-//! side of its rpm (equal power), as infinite-driver's sample engine does, and
-//! the on and off sets by its load. Each car carries two slots per set: the
-//! loops alternate between them up the grid, so the slot that changes loop is
-//! always the one that has just faded out.
+//! Each body has its own engine ([`Layout`]): a bank of loops held at steady
+//! rpm, on load (pulling) and off load (coasting). A voice here plays at one
+//! fixed rate, so the bank is a close grid of rpms and the engine crossfades
+//! the two either side of its rpm (equal power), as infinite-driver's sample
+//! engine does, and the on and off sets by its load. Each car carries two slots
+//! per set: the loops alternate between them up the grid, so the slot that
+//! changes loop is always the one that has just faded out.
 use crate::car::{self, Car};
 use crate::track::{Track, HALF};
 use exact_game::audio::{self, AudioListener, AudioSource, Sample, Spatial};
 use exact_game::*;
 
-/// The recorded loops' rpms (`art/src/sounds.py` prints these).
-pub const ENGINE_RPMS: [u32; 26] = [
-    800, 1000, 1250, 1500, 1600, 1720, 1840, 1970, 2100, 2250, 2410, 2580, 2760, 2950, 3160, 3380,
-    3610, 3870, 4140, 4430, 4740, 5070, 5420, 5800, 6210, 6600,
-];
+/// Calls `$then!` with the bank's rpms (`art/src/engines.py` prints them), so
+/// every list built from them agrees.
+macro_rules! rpms {
+    ($then:ident!($($arg:tt)*)) => {
+        $then!($($arg)* 800 1000 1250 1500 1600 1720 1840 1970 2100 2250 2410 2580 2760 2950 3160 3380 3610 3870 4140 4430)
+    };
+}
+macro_rules! array {
+    ($($rpm:literal)*) => { [$($rpm),*] };
+}
+macro_rules! bank {
+    ($layout:literal $($rpm:literal)*) => {
+        [$(
+            concat!("engine-", $layout, "-on-", $rpm, ".sound"),
+            concat!("engine-", $layout, "-off-", $rpm, ".sound"),
+        )*]
+    };
+}
 
-/// Every baked sound setup waits for.
-pub const ASSETS: [&str; 72] = [
-    "engine-off-1000.sound",
-    "engine-off-1250.sound",
-    "engine-off-1500.sound",
-    "engine-off-1600.sound",
-    "engine-off-1720.sound",
-    "engine-off-1840.sound",
-    "engine-off-1970.sound",
-    "engine-off-2100.sound",
-    "engine-off-2250.sound",
-    "engine-off-2410.sound",
-    "engine-off-2580.sound",
-    "engine-off-2760.sound",
-    "engine-off-2950.sound",
-    "engine-off-3160.sound",
-    "engine-off-3380.sound",
-    "engine-off-3610.sound",
-    "engine-off-3870.sound",
-    "engine-off-4140.sound",
-    "engine-off-4430.sound",
-    "engine-off-4740.sound",
-    "engine-off-5070.sound",
-    "engine-off-5420.sound",
-    "engine-off-5800.sound",
-    "engine-off-6210.sound",
-    "engine-off-6600.sound",
-    "engine-off-800.sound",
-    "engine-on-1000.sound",
-    "engine-on-1250.sound",
-    "engine-on-1500.sound",
-    "engine-on-1600.sound",
-    "engine-on-1720.sound",
-    "engine-on-1840.sound",
-    "engine-on-1970.sound",
-    "engine-on-2100.sound",
-    "engine-on-2250.sound",
-    "engine-on-2410.sound",
-    "engine-on-2580.sound",
-    "engine-on-2760.sound",
-    "engine-on-2950.sound",
-    "engine-on-3160.sound",
-    "engine-on-3380.sound",
-    "engine-on-3610.sound",
-    "engine-on-3870.sound",
-    "engine-on-4140.sound",
-    "engine-on-4430.sound",
-    "engine-on-4740.sound",
-    "engine-on-5070.sound",
-    "engine-on-5420.sound",
-    "engine-on-5800.sound",
-    "engine-on-6210.sound",
-    "engine-on-6600.sound",
-    "engine-on-800.sound",
+/// Calls `$then!` with the pops' rpms (`art/src/engines.py` prints them).
+macro_rules! pop_rpms {
+    ($then:ident!($($arg:tt)*)) => {
+        $then!($($arg)* 2580 2950 3380 3870)
+    };
+}
+macro_rules! pops {
+    ($layout:literal $($rpm:literal)*) => {
+        [$(
+            concat!("pop-", $layout, "-", $rpm, "-0.sound"),
+            concat!("pop-", $layout, "-", $rpm, "-1.sound"),
+        )*]
+    };
+}
+
+pub const ENGINE_RPMS: [u32; 20] = rpms!(array!());
+/// Each engine's pops are rendered at these rpms, in its own note there;
+/// the nearest is bent to the engine's rpm as it plays.
+pub const POP_RPMS: [u32; 4] = pop_rpms!(array!());
+const POP_TAKES: u32 = 2;
+
+/// A body's engine, which names its bank of loops and its pops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layout {
+    /// The 70s sports cars' air-cooled flat six.
+    Flat6,
+    /// The mid-engine rally cars' V6.
+    V6,
+    /// The rally saloons' four.
+    I4,
+}
+
+impl Layout {
+    pub const ALL: [Layout; 3] = [Layout::Flat6, Layout::V6, Layout::I4];
+
+    /// Each car's engine, by its body (`art/src/cars.py`).
+    pub fn of(car: u32) -> Layout {
+        match car {
+            0 | 4 => Layout::Flat6,
+            1 | 5 => Layout::V6,
+            _ => Layout::I4,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Layout::Flat6 => "flat6",
+            Layout::V6 => "v6",
+            Layout::I4 => "i4",
+        }
+    }
+
+    /// How many pops a lift sets off (fewest, most), and how loud as a share
+    /// of the engine's own level: the rally engines bark, the sports car
+    /// burbles. With `pop`'s 10% variation a pop never outplays its engine.
+    fn overrun(self) -> (u32, u32, f32) {
+        match self {
+            Layout::Flat6 => (1, 2, 0.55),
+            Layout::V6 => (1, 3, 0.8),
+            Layout::I4 => (2, 3, 0.85),
+        }
+    }
+}
+
+const FOLEY_ASSETS: [&str; 20] = [
     "hit-0.sound",
     "hit-1.sound",
     "hit-2.sound",
@@ -97,6 +123,36 @@ pub const ASSETS: [&str; 72] = [
     "sting-lap.sound",
 ];
 
+/// Every baked sound setup waits for.
+pub const ASSETS: [&str;
+    Layout::ALL.len() * (2 * ENGINE_RPMS.len() + POP_TAKES as usize * POP_RPMS.len())
+        + FOLEY_ASSETS.len()] = join(&[
+    &rpms!(bank!("flat6")),
+    &rpms!(bank!("v6")),
+    &rpms!(bank!("i4")),
+    &pop_rpms!(pops!("flat6")),
+    &pop_rpms!(pops!("v6")),
+    &pop_rpms!(pops!("i4")),
+    &FOLEY_ASSETS,
+]);
+
+/// `lists` end to end, which must hold exactly `N` names.
+const fn join<const N: usize>(lists: &[&[&'static str]]) -> [&'static str; N] {
+    let mut all = [""; N];
+    let (mut i, mut l) = (0, 0);
+    while l < lists.len() {
+        let mut k = 0;
+        while k < lists[l].len() {
+            all[i] = lists[l][k];
+            i += 1;
+            k += 1;
+        }
+        l += 1;
+    }
+    assert!(i == N, "the asset lists do not add up");
+    all
+}
+
 /// The loops that last while something does.
 const LOOPS: [&str; 5] = ["squeal", "slide", "roll-gravel", "roll-dirt", "scrape"];
 /// One-shots.
@@ -118,8 +174,7 @@ const SHOTS: [&str; 14] = [
 ];
 
 pub const IDLE: f32 = 900.0;
-/// The limiter, far under the recorded V8's (its bank goes to 6600), whose top
-/// sounds like a dragster. It sits on a recorded loop, so no higher one plays.
+/// The limiter: the top loop of every bank.
 pub const REDLINE: f32 = 4430.0;
 /// Road speed (m/s) at the limiter in each gear: top gear puts `car::TOP` near 4000 rpm.
 pub const GEARS: [f32; 5] = [14.0, 18.0, 23.0, 29.5, 37.5];
@@ -146,6 +201,14 @@ const SQUEAL_FROM: f32 = 1.5;
 const SQUEAL_FULL: f32 = 6.0;
 const SQUEAL_LEVEL: f32 = 0.7;
 
+/// Overrun: lifting off from over `POP_FROM` rpm, after the throttle has been
+/// open at least `POP_HELD` seconds (so feathering never crackles), pops the
+/// exhaust within `POP_WINDOW` seconds; never more than `POPS_AT_ONCE` sound together.
+const POP_FROM: f32 = 2500.0;
+const POP_HELD: f32 = 0.3;
+const POP_WINDOW: f32 = 0.6;
+const POPS_AT_ONCE: usize = 3;
+
 /// Rivals fade with distance from the player (the listener rides with them).
 const SPATIAL: Spatial = Spatial {
     distance_model: audio::DistanceModel::Inverse,
@@ -168,14 +231,61 @@ pub struct Engine {
     pub last_hit: u64,
     pub crossings: u32,
     pub finished: bool,
+    /// Seconds the throttle has been open.
+    pub open: f32,
+    /// The tick of the last lift from high revs, whose pops follow.
+    pub lift: Option<u64>,
 }
 
 /// One of a car's engine voices: its set (on or off load) and its parity in the grid.
+/// The player's is an `AudioSource` on the slot; a rival's is a looping voice,
+/// which can bend in pitch, held while it is audible.
 #[derive(Clone, Copy, Debug, Default, Component)]
 pub struct Slot {
     pub car: u32,
     pub on: bool,
     pub odd: bool,
+    pub voice: Option<audio::VoiceId>,
+}
+
+/// Where a car's engine and pops are heard from: an anchor at the car's true
+/// distance from the ears, turned so that Exact's pan (the offset across over
+/// the distance) comes out at `pan`; and the Doppler bend of its pitch.
+#[derive(Clone, Copy, Debug, Default, Component)]
+pub struct Heard {
+    pub car: u32,
+    pub pan: f32,
+    pub doppler: f32,
+}
+
+/// The pan curve: full strength `PAN_MOST`, the offset along the screen
+/// counted at `PAN_DEPTH` of the offset across, and `PAN_NEAR` metres that
+/// keep a car passing right over the player from snapping side to side.
+const PAN_MOST: f32 = 0.85;
+const PAN_DEPTH: f32 = 0.4;
+const PAN_NEAR: f32 = 2.0;
+/// The speed of sound for the Doppler bend (m/s), under half the real one so
+/// a pass is heard, and the most it bends either way (about a semitone).
+const SOUND_SPEED: f32 = 150.0;
+const DOPPLER_MOST: f32 = 0.08;
+/// Seconds the bend takes to follow, so it glides rather than steps.
+const DOPPLER_EASE: f32 = 0.15;
+
+/// The pan (-1 left to 1 right) of a car `offset` from the player on the
+/// ground, x across the screen and y down it: the camera looks straight down
+/// the track, so world x is screen x. Exact's own pan, x over the distance,
+/// leaves a car a little ahead nearly central; this one gives the side more weight.
+pub fn pan(offset: Vec2) -> f32 {
+    let depth = PAN_DEPTH * offset.y;
+    PAN_MOST * offset.x / (offset.x * offset.x + depth * depth + PAN_NEAR * PAN_NEAR).sqrt()
+}
+
+/// How much a car's pitch bends, heard by a listener: above 1 closing, below
+/// 1 drawing apart, clamped to `DOPPLER_MOST`.
+pub fn doppler(source: Vec2, source_v: Vec2, listener: Vec2, listener_v: Vec2) -> f32 {
+    let towards = (listener - source).normalize_or_zero();
+    let bend = (SOUND_SPEED - listener_v.dot(towards)) / (SOUND_SPEED - source_v.dot(towards));
+    bend.clamp(1.0 - DOPPLER_MOST, 1.0 + DOPPLER_MOST)
 }
 
 /// One of the player's tyre and body loops.
@@ -188,17 +298,29 @@ const SLIDE: u32 = 1;
 const ROLL: u32 = 2;
 const SCRAPE: u32 = 3;
 
-fn engine_name(on: bool, rpm: u32) -> String {
-    format!("engine-{}-{rpm}", if on { "on" } else { "off" })
+fn engine_name(layout: Layout, on: bool, rpm: u32) -> String {
+    format!(
+        "engine-{}-{}-{rpm}",
+        layout.name(),
+        if on { "on" } else { "off" }
+    )
 }
 
 /// Name every sound, start the music, and give each car its engine.
 pub fn setup(w: &mut World, cars: &[(u32, Entity)], dirt: bool) {
     let mut defs: Vec<(String, Sample)> = Vec::new();
-    for on in [true, false] {
-        for rpm in ENGINE_RPMS {
-            let name = engine_name(on, rpm);
-            defs.push((name.clone(), Sample::new(format!("{name}.sound")).looped()));
+    for layout in Layout::ALL {
+        for on in [true, false] {
+            for rpm in ENGINE_RPMS {
+                let name = engine_name(layout, on, rpm);
+                defs.push((name.clone(), Sample::new(format!("{name}.sound")).looped()));
+            }
+        }
+        for rpm in POP_RPMS {
+            for take in 0..POP_TAKES {
+                let name = format!("pop-{}-{rpm}-{take}", layout.name());
+                defs.push((name.clone(), Sample::new(format!("{name}.sound"))));
+            }
         }
     }
     for name in LOOPS {
@@ -224,24 +346,48 @@ pub fn setup(w: &mut World, cars: &[(u32, Entity)], dirt: bool) {
         );
         // Hits play at the car, and fade as its engine does.
         w.insert(e, SPATIAL);
-        // Rivals pull nearly all the time: their off-load set would be wasted voices.
-        let sets: &[bool] = if id == crate::PLAYER {
-            &[true, false]
+        if id == crate::PLAYER {
+            for on in [true, false] {
+                for odd in [false, true] {
+                    let first = ENGINE_RPMS[odd as usize];
+                    w.spawn((
+                        Transform::default(),
+                        AudioSource {
+                            playing: false,
+                            ..AudioSource::new(engine_name(Layout::of(id), on, first)).gain(0.0)
+                        },
+                        SPATIAL,
+                        Slot {
+                            car: id,
+                            on,
+                            odd,
+                            voice: None,
+                        },
+                        Parent(e),
+                        Ambient,
+                    ));
+                }
+            }
         } else {
-            &[true]
-        };
-        for &on in sets {
+            w.spawn((
+                Transform::default(),
+                SPATIAL,
+                Heard {
+                    car: id,
+                    pan: 0.0,
+                    doppler: 1.0,
+                },
+                Ambient,
+            ));
+            // Rivals pull nearly all the time: their off-load set would be wasted voices.
             for odd in [false, true] {
-                let first = ENGINE_RPMS[odd as usize];
                 w.spawn((
-                    Transform::default(),
-                    AudioSource {
-                        playing: false,
-                        ..AudioSource::new(engine_name(on, first)).gain(0.0)
+                    Slot {
+                        car: id,
+                        on: true,
+                        odd,
+                        voice: None,
                     },
-                    SPATIAL,
-                    Slot { car: id, on, odd },
-                    Parent(e),
                     Ambient,
                 ));
             }
@@ -334,6 +480,30 @@ pub fn crossfade(rpm: f32) -> (usize, f32, f32) {
     (i, math::cos(q), math::sin(q))
 }
 
+fn level(car: u32) -> f32 {
+    if car == crate::PLAYER {
+        ENGINE_PLAYER
+    } else {
+        ENGINE_RIVAL
+    }
+}
+
+/// A rival's single set: a little quieter off the throttle.
+fn rival_set(load: f32) -> f32 {
+    0.7 + 0.3 * load
+}
+
+/// How loud a car's engine plays as a whole: its slots' gains add up to this
+/// in power, since loops and the player's two sets crossfade at equal power.
+fn engine_level(car: u32, load: f32) -> f32 {
+    level(car)
+        * if car == crate::PLAYER {
+            1.0
+        } else {
+            rival_set(load.clamp(0.0, 1.0))
+        }
+}
+
 /// What a slot should play: its loop and gain for this rpm and load.
 fn slot_target(slot: &Slot, e: &Engine, level: f32) -> (u32, f32) {
     let (i, ga, gb) = crossfade(e.rpm);
@@ -345,8 +515,7 @@ fn slot_target(slot: &Slot, e: &Engine, level: f32) -> (u32, f32) {
     let load = e.load.clamp(0.0, 1.0);
     let q = load * std::f32::consts::FRAC_PI_2;
     let set = if slot.car != crate::PLAYER {
-        // A rival's single set: a little quieter off the throttle.
-        0.7 + 0.3 * load
+        rival_set(load)
     } else if slot.on {
         math::sin(q)
     } else {
@@ -373,16 +542,187 @@ fn set_source(w: &mut World, e: Entity, sound: &str, gain: f32) {
     }
 }
 
+/// Seconds an audible rival slot takes to fade out of one loop, and then into the next.
+const LOOP_SWAP: f32 = 0.02;
+/// Quieter than this a slot just stops: the cut is inaudible.
+const HANDOVER_FROM: f32 = 0.02;
+
+/// Keep a rival's slot voice playing `sound` at `gain` and `pitch` from its
+/// anchor, started as it becomes audible. A gear change can move a slot to a
+/// new loop while it is still loud: its voice then fades out over `LOOP_SWAP`
+/// and the new loop fades in from the boundary where it ends, so a slot never
+/// holds two voices and the loops stay within budget. A quiet one just stops.
+fn set_voice(w: &mut World, e: Entity, anchor: Entity, sound: &str, gain: f32, pitch: f32) {
+    let gain = (gain * 256.0).round() / 256.0;
+    let mut slot = *w.require::<Slot>(e);
+    // A voice authored this tick begins at the next boundary, where one whose
+    // fade ends there is dropped: the next loop takes over without a gap.
+    let boundary = w.tick() + 1;
+    let playing = slot.voice.map(|id| {
+        let voices = w.resource::<audio::Voices>();
+        let v = voices
+            .voices
+            .iter()
+            .find(|v| v.id == id && v.ends > boundary)?;
+        let fading = v.fade.is_some_and(|f| f.end == 0.0);
+        Some((id, v.sound == sound, v.gain, v.pitch, fading))
+    });
+    let handed_over = match playing {
+        // Fading out, or still on its loop: it follows the slot's gain and bend.
+        Some(Some((id, same, was, bent, fading))) if fading || same && gain > 0.0 => {
+            if was != gain {
+                let mut voices = w.resource_mut::<audio::Voices>();
+                if let Some(v) = voices.voices.iter_mut().find(|v| v.id == id) {
+                    v.gain = gain;
+                }
+            }
+            if (bent - pitch).abs() > 1e-4 {
+                audio::pitch(w, id, pitch);
+            }
+            return;
+        }
+        Some(Some((id, _, was, _, _))) if was >= HANDOVER_FROM => {
+            audio::pitch(w, id, pitch);
+            return audio::fade(w, id, LOOP_SWAP);
+        }
+        Some(Some((id, ..))) => {
+            audio::stop(w, id);
+            false
+        }
+        // The voice it was fading out has gone, or goes at this boundary.
+        Some(None) => true,
+        None => false,
+    };
+    slot.voice = (gain > 0.0).then(|| {
+        let play = w.play(sound).at(anchor).gain(gain).pitch(pitch);
+        if handed_over {
+            play.fade_in(LOOP_SWAP).start()
+        } else {
+            play.start()
+        }
+    });
+    *w.require_mut::<Slot>(e) = slot;
+}
+
+/// Move each rival's anchor to where it is heard from and ease its Doppler bend.
+fn hear(w: &mut World, cars: &[(Entity, Car, Vec3)], ears: Vec3, ears_v: Vec2, dt: f32) {
+    let ease = 1.0 - math::exp(-dt / DOPPLER_EASE);
+    let anchors: Vec<(Entity, Heard)> = w.query::<&Heard>().iter().map(|(e, h)| (e, *h)).collect();
+    for (anchor, mut heard) in anchors {
+        let Some((_, car, at)) = cars.iter().find(|(_, c, _)| c.id == heard.car) else {
+            continue;
+        };
+        let offset = *at - ears;
+        let bend = doppler(
+            Vec2::new(at.x, at.z),
+            Vec2::new(car.vx, car.vz),
+            Vec2::new(ears.x, ears.z),
+            ears_v,
+        );
+        heard.pan = pan(Vec2::new(offset.x, offset.z));
+        heard.doppler += (bend - heard.doppler) * ease;
+        // The same distance, turned so the offset across over it is the pan.
+        let d = offset.length();
+        w.require_mut::<Transform>(anchor).position =
+            ears + Vec3::new(heard.pan * d, 0.0, (1.0 - heard.pan * heard.pan).sqrt() * d);
+        *w.require_mut::<Heard>(anchor) = heard;
+    }
+}
+
 use math::smoothstep;
 
-/// A pitch near 1 for a hit, varied by when and where it is: the world's
-/// random stream stays the gameplay's alone.
-fn jitter(now: u64, salt: u32, spread: f32) -> f32 {
+/// A number in 0..1 hashed from when and where a sound is: the world's random
+/// stream stays the gameplay's alone.
+fn unit(now: u64, salt: u32) -> f32 {
     let mut h =
         now.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (salt as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
     h ^= h >> 29;
-    let unit = (h % 10_000) as f32 / 10_000.0;
-    1.0 + spread * (unit * 2.0 - 1.0)
+    (h % 10_000) as f32 / 10_000.0
+}
+
+/// A pitch (or gain) near 1, varied as `unit` varies it.
+fn jitter(now: u64, salt: u32, spread: f32) -> f32 {
+    1.0 + spread * (unit(now, salt) * 2.0 - 1.0)
+}
+
+/// Keep `e`'s throttle in mind, and note a lift off it from high revs.
+fn listen_for_lift(e: &mut Engine, car: &Car, now: u64, dt: f32) {
+    let gas = if car.brake { 0.0 } else { car.gas };
+    if gas > 0.0 {
+        e.open += dt;
+        return;
+    }
+    if e.open >= POP_HELD && e.rpm > POP_FROM {
+        e.lift = Some(now);
+    }
+    e.open = 0.0;
+}
+
+/// The ticks at which a lift at `lift` pops `car`'s exhaust: the first as the
+/// unburnt fuel reaches the pipe, the rest spaced out, all within POP_WINDOW
+/// (three at the widest spacing end at 0.92 of it). A rival pops once, so a
+/// pack braking for a corner does not crackle on and on.
+fn pop_ticks(layout: Layout, car: u32, lift: u64, hz: f32) -> impl Iterator<Item = u64> {
+    let (fewest, most, _) = layout.overrun();
+    let salt = 1000 + 8 * car;
+    let count = if car == crate::PLAYER {
+        fewest + (unit(lift, salt) * (most - fewest + 1) as f32) as u32
+    } else {
+        1
+    };
+    let mut at = 0.08 + 0.17 * unit(lift, salt + 1);
+    (0..count).map(move |k| {
+        let tick = lift + (at * POP_WINDOW * hz).round() as u64;
+        at += 0.13 + 0.2 * unit(lift, salt + 2 + k);
+        tick
+    })
+}
+
+/// Play `car`'s overrun pop if one is due `now`, unless enough already sound:
+/// the take rendered nearest its rpm, bent to it, under the engine's own level.
+fn pop(w: &World, at: Entity, car: u32, doppler: f32, engine: &Engine, now: u64) {
+    let layout = Layout::of(car);
+    let Some(lift) = engine.lift else { return };
+    let Some(nth) = pop_ticks(layout, car, lift, w.hz() as f32).position(|t| t == now) else {
+        return;
+    };
+    let popping = w
+        .resource::<audio::Voices>()
+        .voices
+        .iter()
+        .filter(|v| v.sound.starts_with("pop-"))
+        .count();
+    if popping >= POPS_AT_ONCE {
+        return;
+    }
+    let distance = |r: u32| math::ln(engine.rpm / r as f32).abs();
+    let rendered = POP_RPMS
+        .into_iter()
+        .min_by(|&a, &b| distance(a).total_cmp(&distance(b)))
+        .unwrap();
+    let salt = 2000 + 4 * car;
+    let take = (unit(now, salt) * POP_TAKES as f32) as u32;
+    let (_, _, share) = layout.overrun();
+    w.play(&format!("pop-{}-{rendered}-{take}", layout.name()))
+        .at(at)
+        .gain(share * jitter(now, salt + 1, 0.1) * engine_level(car, engine.load))
+        .pitch((engine.rpm / rendered as f32).clamp(0.8, 1.25) * doppler)
+        .pan(pop_pan(car, lift, nth, now))
+        .start();
+}
+
+/// The player's own pops sit on the listener, dead centre: step each one a
+/// little to a side, alternating through a lift's pops like twin tailpipes.
+/// Exact applies pan as a balance after spatial gains, so on a rival it would
+/// pull the pop off the car it comes from: theirs stay at 0.
+fn pop_pan(car: u32, lift: u64, nth: usize, now: u64) -> f32 {
+    if car != crate::PLAYER {
+        return 0.0;
+    }
+    let salt = 3000 + 4 * car;
+    let first = if unit(lift, salt) < 0.5 { -1.0 } else { 1.0 };
+    let side = if nth % 2 == 0 { first } else { -first };
+    side * (0.15 + 0.2 * unit(now, salt + 1))
 }
 
 /// Corners have kerbs (as `scenery::road` lays them); the dirt track has none.
@@ -398,7 +738,8 @@ pub fn squeal(sideways: f32, locked: bool) -> f32 {
     SQUEAL_LEVEL * if locked { slide.max(0.6) } else { slide }
 }
 
-/// After gameplay: engines, the player's tyres, knocks and stings, then `audio::step`.
+/// After gameplay: engines and their pops, the player's tyres, knocks and
+/// stings, then `audio::step`.
 pub fn tick(w: &mut World, now: u64, start: u64, volume: f32) {
     if w.resource::<audio::Audio>().master != volume {
         w.resource_mut::<audio::Audio>().master = volume;
@@ -419,13 +760,23 @@ pub fn tick(w: &mut World, now: u64, start: u64, volume: f32) {
         .iter()
         .map(|(e, (pose, car))| (e, car.clone(), pose.position))
         .collect();
+    if let Some((_, player, at)) = cars.iter().find(|(_, c, _)| c.id == crate::PLAYER) {
+        w.require_mut::<Transform>("ears").position = *at;
+        hear(w, &cars, *at, Vec2::new(player.vx, player.vz), dt);
+    }
+    let anchors: Vec<(Entity, Heard)> = w.query::<&Heard>().iter().map(|(e, h)| (e, *h)).collect();
+    let anchor = |car: u32| anchors.iter().find(|(_, h)| h.car == car).copied();
     let mut engines = [Engine::default(); crate::DRIVERS.len()];
-    for (e, car, pos) in &cars {
+    for (e, car, _) in &cars {
         let mut engine = *w.require::<Engine>(*e);
         let i = car.idx as usize;
         let (s, c) = math::sin_cos(car.heading);
         let climb = t.grade[i] * t.tangent(i).dot(Vec2::new(c, s));
+        listen_for_lift(&mut engine, car, now, dt);
         rev(&mut engine, car, climb, racing, dt);
+        // The player's own pops play at its car, unbent.
+        let (at, doppler) = anchor(car.id).map_or((*e, 1.0), |(a, h)| (a, h.doppler));
+        pop(w, at, car.id, doppler, &engine, now);
         let speed = Vec2::new(car.vx, car.vz).length();
         // A knock: another car, the fence, or coming down off a crest; light to heavy.
         let knock = car.knock.max(car.landing * 1.5);
@@ -463,8 +814,6 @@ pub fn tick(w: &mut World, now: u64, start: u64, volume: f32) {
             if car.finished && !engine.finished {
                 w.play("sting-finish").ui().gain(STING).start();
             }
-            let mut ears = w.require_mut::<Transform>("ears");
-            ears.position = *pos;
         }
         engine.crossings = car.crossings;
         engine.finished = car.finished;
@@ -474,13 +823,14 @@ pub fn tick(w: &mut World, now: u64, start: u64, volume: f32) {
     // The engine slots.
     let slots: Vec<(Entity, Slot)> = w.query::<&Slot>().iter().map(|(e, s)| (e, *s)).collect();
     for (e, slot) in slots {
-        let level = if slot.car == crate::PLAYER {
-            ENGINE_PLAYER
+        let (rpm, gain) = slot_target(&slot, &engines[slot.car as usize], level(slot.car));
+        let sound = engine_name(Layout::of(slot.car), slot.on, rpm);
+        if slot.car == crate::PLAYER {
+            set_source(w, e, &sound, gain);
         } else {
-            ENGINE_RIVAL
-        };
-        let (rpm, gain) = slot_target(&slot, &engines[slot.car as usize], level);
-        set_source(w, e, &engine_name(slot.on, rpm), gain);
+            let (at, heard) = anchor(slot.car).expect("every rival has an anchor");
+            set_voice(w, e, at, &sound, gain, heard.doppler);
+        }
     }
     // The player's tyres and body.
     if let Some((_, player, _)) = cars.iter().find(|(_, c, _)| c.id == crate::PLAYER) {
