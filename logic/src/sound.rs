@@ -133,6 +133,11 @@ const MUSIC: f32 = 0.32;
 const ENGINE_PLAYER: f32 = 0.55;
 const ENGINE_RIVAL: f32 = 0.5;
 const STING: f32 = 0.5;
+/// The player's tyres squeal from this sideways speed (m/s), well before the
+/// slide that lays skid marks (`car::SLIDE`), up to their loudest here.
+const SQUEAL_FROM: f32 = 1.5;
+const SQUEAL_FULL: f32 = 6.0;
+const SQUEAL_LEVEL: f32 = 0.7;
 
 /// Rivals fade with distance from the player (the listener rides with them).
 const SPATIAL: Spatial = Spatial {
@@ -365,6 +370,13 @@ fn kerbed(t: &Track, i: usize) -> bool {
     !t.dirt && (0..9).any(|k| t.bend[(i + n + k - 4) % n].abs() > 1.0 / 24.0)
 }
 
+/// How loud the tyres squeal on tarmac, sliding `sideways` (m/s) or with the
+/// wheels `locked` under braking.
+pub fn squeal(sideways: f32, locked: bool) -> f32 {
+    let slide = smoothstep(SQUEAL_FROM, SQUEAL_FULL, sideways);
+    SQUEAL_LEVEL * if locked { slide.max(0.6) } else { slide }
+}
+
 /// After gameplay: engines, the player's tyres, knocks and stings, then `audio::step`.
 pub fn tick(w: &mut World, now: u64, start: u64, volume: f32) {
     if w.resource::<audio::Audio>().master != volume {
@@ -464,7 +476,13 @@ pub fn tick(w: &mut World, now: u64, start: u64, volume: f32) {
         for (e, f, sound) in foley {
             let gain = match f.kind {
                 // Rubber on tarmac squeals; on dirt and gravel it scrubs.
-                SQUEAL => slide * if road && !t.dirt { 0.45 } else { 0.0 },
+                SQUEAL => {
+                    if road && !t.dirt {
+                        squeal(sideways, player.locked)
+                    } else {
+                        0.0
+                    }
+                }
                 SLIDE => slide * if road && !t.dirt { 0.15 } else { 0.5 },
                 ROLL => smoothstep(1.0, 18.0, speed) * if t.dirt || !road { 0.45 } else { 0.0 },
                 SCRAPE => {

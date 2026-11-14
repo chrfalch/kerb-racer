@@ -179,9 +179,32 @@ pub fn car(w: &mut World, t: &Track, body: &mut Body, name: &str, dt: f32) {
     }
 }
 
+/// What a guide chevron tells the player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cue {
+    Green,
+    Amber,
+    Red,
+}
+
+/// The cue for a chevron where the car must slow at `need` (m/s²) to make
+/// the planned speed there, measured against a lift off the gas: the
+/// player's only brake. Red means let go now, amber that it is coming.
+pub fn guide_cue(t: &Track, need: f32) -> Cue {
+    let brake = if t.dirt { car::BRAKE_DIRT } else { car::BRAKE };
+    let lift = brake * car::LIFT * if t.wet { 0.8 } else { 0.85 };
+    if need > 0.7 * lift {
+        Cue::Red
+    } else if need > 0.3 * lift {
+        Cue::Amber
+    } else {
+        Cue::Green
+    }
+}
+
 /// The player's guide and arrow: chevrons painted down the line ahead,
 /// green where the car is fine as it is, amber where it must slow soon, red
-/// where it has to be braking now; and the arrow on the side it will pass.
+/// where it has to be off the gas now; and the arrow on the side it will pass.
 pub fn player(w: &mut World, t: &Track, body: &Body, assist: u32) {
     let car = &body.car;
     let side = if car.pass != 0 { car.pass_side } else { 0.0 };
@@ -195,7 +218,6 @@ pub fn player(w: &mut World, t: &Track, body: &Body, assist: u32) {
     }
     let on = assist > 0 && !car.finished;
     let speed = body.v().length();
-    let brake = if t.dirt { car::BRAKE_DIRT } else { car::BRAKE } * if t.wet { 0.8 } else { 0.85 };
     let here = car.idx as f32 * t.step;
     let first = math::ceil((here + GUIDE_FROM) / GUIDE_EVERY) * GUIDE_EVERY;
     for k in 0..GUIDES {
@@ -210,12 +232,10 @@ pub fn player(w: &mut World, t: &Track, body: &Body, assist: u32) {
         // Deceleration needed to be at the planned speed there.
         let target = t.speed[j];
         let need = (speed * speed - target * target) / (2.0 * ahead);
-        let glow = if need > 0.7 * brake {
-            RED
-        } else if need > 0.2 * brake {
-            AMBER
-        } else {
-            GREEN
+        let glow = match guide_cue(t, need) {
+            Cue::Red => RED,
+            Cue::Amber => AMBER,
+            Cue::Green => GREEN,
         };
         if w.require::<Material>(name.as_str()).emissive != glow {
             w.require_mut::<Material>(name.as_str()).emissive = glow;

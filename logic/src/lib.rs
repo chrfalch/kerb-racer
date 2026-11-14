@@ -21,7 +21,8 @@ pub struct Options {
     /// Graphics: 0 low (no undergrowth), 1 medium (baked shadows, the default), 2 high (real-time sun shadows, haze and bloom).
     pub quality: u32,
     /// Driving help: 0 none, 1 the braking guide on the road (the default),
-    /// 2 the guide and a throttle that lifts by itself before a corner.
+    /// 2 the guide and a throttle that lifts by itself before a corner taken
+    /// too fast or behind a car it cannot pass, and brakes when far too fast.
     pub assist: u32,
     #[live]
     pub paused: bool,
@@ -611,13 +612,7 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
             }
             car::drive(&t, body, caps[k]);
         } else {
-            let held = input.held("gas");
-            body.car.gas = throttle(body.car.gas, held, dt);
-            body.car.brake = !held;
-            body.car.lift = !held;
-            if assist >= 2 {
-                lift_for_corners(&t, body);
-            }
+            player_pedals(&t, body, input.held("gas"), caps[k], assist, dt);
         }
         if now == start {
             body.car.lap_tick = start;
@@ -715,6 +710,25 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
     }
 }
 
+/// The player's pedals for this tick: gas while `held`, a lift off it when
+/// not. The full assist also holds the car to `cap` behind a car in the way
+/// (from `car::plan`), lifts coming into a corner too fast for it and brakes
+/// hard when far too fast.
+pub fn player_pedals(t: &Track, body: &mut Body, held: bool, cap: f32, assist: u32, dt: f32) {
+    let full = assist >= 2;
+    let cap = if full { cap } else { f32::MAX };
+    let v = body.v().length();
+    let plan = t.speed[t.wrap(body.car.idx as i64 + (8.0 / t.step) as i64)];
+    let over = |k: f32| full && plan < track::VMAX && v > plan * k;
+    // Under the cap the gas eases off as a rival's does; only well over it
+    // does the car lift, and it stays lifted until well under the cap.
+    let capped = v > cap + if body.car.brake { -0.5 } else { 0.6 };
+    let lift = !held || capped || over(1.05);
+    body.car.gas = throttle(body.car.gas, !lift, dt).min(((cap - v) * 1.5 + 0.35).max(0.0));
+    body.car.brake = lift;
+    body.car.lift = lift && !over(1.14);
+}
+
 /// The gas pedal under a finger or a key: held, it comes in quickly from a
 /// little over half throttle to full, so a quick dab only feathers it.
 fn throttle(gas: f32, held: bool, dt: f32) -> f32 {
@@ -722,21 +736,6 @@ fn throttle(gas: f32, held: bool, dt: f32) -> f32 {
         (gas.max(0.55) + dt * 1.8).min(1.0)
     } else {
         0.0
-    }
-}
-
-/// The full assist: off the gas when the car is coming into a corner too
-/// fast for it, and on the brakes when far too fast.
-fn lift_for_corners(t: &Track, body: &mut Body) {
-    let i = t.wrap(body.car.idx as i64 + (8.0 / t.step) as i64);
-    let v = body.v().length();
-    let plan = t.speed[i];
-    if v > plan * 1.05 {
-        body.car.gas = 0.0;
-    }
-    if v > plan * 1.14 {
-        body.car.brake = true;
-        body.car.lift = false;
     }
 }
 

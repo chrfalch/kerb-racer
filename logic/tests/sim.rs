@@ -1,14 +1,20 @@
+mod common;
+
+use common::without_rivals;
 use exact_game::Sim;
 use kerb_racers_logic::car::{self, Car, GRASS};
 use kerb_racers_logic::track::{self, Track, HALF};
 use kerb_racers_logic::{radar, standings, KerbRacers, Options, Race, PLAYER, RADAR_REACH};
 
 fn race(track: u32) -> Sim<KerbRacers> {
-    let mut sim = Sim::<KerbRacers>::new(Options {
+    race_with(Options {
         track,
         ..Options::default()
     })
-    .unwrap();
+}
+
+fn race_with(options: Options) -> Sim<KerbRacers> {
+    let mut sim = Sim::<KerbRacers>::new(options).unwrap();
     // The baked models and textures, as a host delivers them. The road and
     // ground are generated in setup and come back as requests with no file:
     // they are already loaded, so their read failures are expected.
@@ -107,7 +113,11 @@ fn rivals_finish_three_laps_on_every_track() {
 
 #[test]
 fn flat_out_leaves_the_road() {
-    let mut game = race(0);
+    let mut game = race_with(Options {
+        assist: 0,
+        ..Options::default()
+    });
+    without_rivals(&mut game);
     game.key_down("KeyW");
     let mut off = 0;
     for _ in 0..(120 * 30) {
