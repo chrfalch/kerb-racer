@@ -55,11 +55,13 @@ app would invalidate their baked digests.
 
 ## Sound
 
-Engines, tyres, kerbs and knocks are recordings from infinite-driver's sample
-banks; `python3 art/src/sounds.py` re-pitches its V8 loops onto a close rpm grid
-and writes `art/sounds/*.wav`. The race music, the countdown, lap and flag
-stings and the menu theme (`assets/music/menu.m4a`) are composed and rendered
-by `python3 art/src/music.py`. `logic/src/sound.rs` drives them: a gearbox
+Each body has its own engine (a flat six, a V6 and a four), synthesized with
+its overrun pops by `python3 art/src/engines.py` as loops on a close rpm grid;
+no recordings. Tyres, kerbs and knocks are recordings from infinite-driver's
+sample banks, which `python3 art/src/sounds.py` copies to `art/sounds/*.wav`.
+The race music, the countdown, lap and flag stings and the menu theme
+(`assets/music/menu.m4a`) are composed and rendered by
+`python3 art/src/music.py`. `logic/src/sound.rs` drives them: a gearbox
 turns road speed into rpm and each engine crossfades the two nearest loops. The
 speaker button mutes everything (remembered); on iOS the ring/silent switch
 mutes it too, since the app keeps Exact's default `ambient` audio session.
