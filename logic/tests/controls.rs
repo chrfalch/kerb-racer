@@ -2,6 +2,7 @@
 //! picks its own side to pass on.
 use exact_game::{Game, InputEvent, PointerPhase, Sim};
 use kerb_racers_logic::car::{self, Car};
+use kerb_racers_logic::track::Track;
 use kerb_racers_logic::{KerbRacers, Options, Race};
 
 const WIDTH: f32 = 800.0;
@@ -129,15 +130,27 @@ fn letting_go_brakes_gently_without_locking_the_wheels() {
     let mut game = Host::new();
     game.to_the_lights();
     game.sim.key_down("KeyW");
-    game.run(3000.0);
     let speed = |car: &Car| (car.vx * car.vx + car.vz * car.vz).sqrt();
+    // Let go at speed with a straight ahead, so a slide in a corner does not
+    // add its scrub to the lift.
+    let straight_ahead = |game: &Host| {
+        let t = game.sim.world().resource::<Track>();
+        let car = game.player();
+        (0..15).all(|k| t.bend[t.wrap(car.idx as i64 + k)].abs() < 0.02)
+    };
+    while speed(&game.player()) < 15.0 || game.player().sliding || !straight_ahead(&game) {
+        assert!(game.ms < 20_000.0, "no straight to lift on");
+        game.run(1000.0 / 120.0);
+    }
     let flat_out = speed(&game.player());
     game.sim.key_up("KeyW");
     for _ in 0..5 {
         game.run(100.0);
         assert!(!game.player().locked, "the wheels lock on a lift");
+        assert!(!game.player().sliding, "the car slides during the lift");
     }
     let shed = (flat_out - speed(&game.player())) / 0.5;
+    println!("a lift from {flat_out:.1} m/s sheds {shed:.1} m/s²");
     assert!(
         shed > 2.0 && shed < car::BRAKE * 0.5,
         "a lift sheds {shed} m/s², a full brake {}",

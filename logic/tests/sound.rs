@@ -157,6 +157,45 @@ fn the_race_is_heard_within_the_voice_budget() {
 }
 
 #[test]
+fn the_tyres_squeal_early_in_a_slide_and_loudly_in_a_full_one() {
+    assert_eq!(sound::squeal(0.5, false), 0.0, "rolling straight is silent");
+    let moderate = sound::squeal(2.5, false);
+    assert!(moderate > 0.05, "a moderate slide is heard: {moderate}");
+    let full = sound::squeal(9.0, false);
+    assert!(full >= 0.65, "a full slide squeals louder than the old 0.45: {full}");
+    let locked = sound::squeal(0.0, true);
+    assert!(locked > 0.3, "locked wheels squeal: {locked}");
+}
+
+#[test]
+fn a_lift_down_a_straight_is_silent() {
+    let mut game = race(0);
+    game.run(3500.0);
+    game.key_down("KeyW");
+    let straight_ahead = |game: &Sim<KerbRacers>| {
+        let w = game.world();
+        let t = w.resource::<Track>();
+        let car = w.require::<Car>("player");
+        let speed = (car.vx * car.vx + car.vz * car.vz).sqrt();
+        speed > 15.0 && !car.sliding && (0..15).all(|k| t.bend[t.wrap(car.idx as i64 + k)].abs() < 0.02)
+    };
+    for _ in 0..(120 * 20) {
+        if straight_ahead(&game) {
+            break;
+        }
+        game.run(1000.0 / 120.0);
+    }
+    assert!(straight_ahead(&game), "no straight to lift on");
+    game.key_up("KeyW");
+    for tick in 0..60 {
+        game.run(1000.0 / 120.0);
+        let w = game.world();
+        let squealing = w.count::<AudioSource>(|s| s.sound == "squeal" && s.playing);
+        assert_eq!(squealing, 0, "tick {tick} of the lift: the tyres squeal");
+    }
+}
+
+#[test]
 fn volume_sets_the_master() {
     let mut game = race(2);
     game.run(100.0);

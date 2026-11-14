@@ -10,7 +10,7 @@ pub const TOP: f32 = 34.0;
 pub const BRAKE: f32 = 24.0;
 /// Letting go of the gas brakes this much of the pedal's force, too little to
 /// lock the wheels: the player's only way to slow, it has to feel smooth.
-pub const LIFT: f32 = 0.26;
+pub const LIFT: f32 = 0.45;
 /// Rolling resistance and the extra engine braking with no pedal.
 pub const ROLL: f32 = 0.6;
 pub const COAST: f32 = 1.4;
@@ -45,6 +45,9 @@ pub const HALF_TRACK: f32 = 0.88;
 pub const PASS_GAP: f32 = 2.6;
 /// The closest two cars side by side may be steered (m between centres).
 pub const SIDE_GAP: f32 = 2.05;
+/// How far behind a car in its way the player's car settles (m between
+/// centres): clear of its bumper, which a car touches at about 3.2.
+pub const FOLLOW: f32 = 4.5;
 /// A pass holds its side until the car passed is this far behind (m).
 pub const PASS_CLEAR: f32 = 4.0;
 /// Slipstream: a car in another's wake, from this close to this far behind
@@ -240,13 +243,14 @@ fn beside(side: f32, pass_side: f32) -> f32 {
 /// Choose each car's lane and fill in its slipstream.
 ///
 /// A car that closes on a slower one picks a side and commits to it: the
-/// player's chosen side if there is room, else the inside of the next corner,
-/// else whichever side has more road. It holds that side until the car it is
-/// passing is `PASS_CLEAR` behind, so a pass never turns back into the car
-/// beside it. Nobody steers toward a car alongside. Rivals also cover the
-/// inside when someone closes from behind, lift behind a car they cannot
-/// pass, and yield a corner to the car on its inside. Returns each car's
-/// speed cap for `drive`.
+/// inside of the next corner if there is room, else whichever side has more
+/// road. It holds that side until the car it is passing is `PASS_CLEAR`
+/// behind, so a pass never turns back into the car beside it. Nobody steers
+/// toward a car alongside. Rivals also cover the inside when someone closes
+/// from behind, lift behind a car they cannot pass, and yield a corner to the
+/// car on its inside. Returns each car's speed cap for `drive`, and for the
+/// player's car one behind a car it cannot get by, which `player_pedals`
+/// keeps to under the full assist.
 pub fn plan(track: &Track, bodies: &mut [Body], dt: f32) -> Vec<f32> {
     let n = bodies.len();
     let length = track.length();
@@ -254,6 +258,7 @@ pub fn plan(track: &Track, bodies: &mut [Body], dt: f32) -> Vec<f32> {
     let speed: Vec<f32> = bodies.iter().map(|b| b.v().length()).collect();
     let side: Vec<f32> = bodies.iter().map(|b| b.car.side).collect();
     let air: Vec<bool> = bodies.iter().map(|b| b.car.air).collect();
+    let lift = if track.dirt { BRAKE_DIRT } else { BRAKE } * LIFT;
     // How far `b` is up the road from `a` (negative: behind).
     let gap = |a: usize, b: usize| {
         let g = progress[b] - progress[a];
@@ -378,6 +383,23 @@ pub fn plan(track: &Track, bodies: &mut [Body], dt: f32) -> Vec<f32> {
             // Squeezed on both sides: hold the lane.
             car.lane
         };
+        // The player's only brake is a lift, and a car alongside can keep it
+        // from pulling out to pass: hold it back behind a car still in the
+        // lane it can steer for. It closes no faster than half a lift can
+        // undo by `FOLLOW`, and drops back from inside it.
+        if !car.ai {
+            let lane = line + target;
+            for b in 0..n {
+                if b != a && (0.5..11.0).contains(&gap(a, b)) && (side[b] - lane).abs() < SIDE_GAP && air[b] == air[a] {
+                    // Measured between the cars, not in whole track samples, so
+                    // the cap does not jump as they cross from one to the next.
+                    let g = (bodies[b].p - bodies[a].p).dot(track.tangent(i));
+                    let room = g - FOLLOW;
+                    let closing = if room > 0.0 { math::sqrt(lift * room) } else { room };
+                    caps[a] = caps[a].min(speed[b] + closing);
+                }
+            }
+        }
 
         let car = &mut bodies[a].car;
         car.pass = pass;
@@ -726,7 +748,7 @@ pub fn locate(track: &Track, body: &mut Body) -> bool {
     false
 }
 
-/// Bounce off the fence: lose most of the speed into it and some of the rest.
+/// Bounce off the fence: lose most of the speed into it and a little of the rest.
 fn fence(track: &Track, body: &mut Body) {
     let i = body.car.idx as usize;
     let limit = track.wall[i] - 1.0;
@@ -742,7 +764,7 @@ fn fence(track: &Track, body: &mut Body) {
     let into = v.dot(out);
     if into > 0.0 {
         body.car.knock = body.car.knock.max(into);
-        body.set_v((v - out * into * 1.35) * 0.7);
+        body.set_v((v - out * into * 1.35) * 0.85);
     }
 }
 
