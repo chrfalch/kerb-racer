@@ -118,20 +118,27 @@ const SHOTS: [&str; 14] = [
 ];
 
 pub const IDLE: f32 = 900.0;
-/// The limiter.
-pub const REDLINE: f32 = 6400.0;
-/// Road speed (m/s) at the limiter in each gear: top gear just covers `car::TOP`.
-pub const GEARS: [f32; 4] = [11.5, 19.0, 27.0, 36.0];
-const UPSHIFT: f32 = 6100.0;
-/// Low enough that the gear below lands under UPSHIFT, so it never hunts.
-const DOWNSHIFT: f32 = 3000.0;
+/// The limiter, far under the recorded V8's (its bank goes to 6600), whose top
+/// sounds like a dragster. It sits on a recorded loop, so no higher one plays.
+pub const REDLINE: f32 = 4430.0;
+/// Road speed (m/s) at the limiter in each gear: top gear puts `car::TOP` near 4000 rpm.
+pub const GEARS: [f32; 5] = [14.0, 18.0, 23.0, 29.5, 37.5];
+/// Well under the limiter, so the engine spends the race in its mid revs.
+const UPSHIFT: f32 = 3300.0;
+/// Under where an upshift lands (2570 at the widest step), and low enough that
+/// the gear below lands under UPSHIFT, so it never hunts.
+const DOWNSHIFT: f32 = 2000.0;
+/// The revs with the clutch in: a blip on the grid, and pulling away.
+const BLIP: f32 = 3800.0;
+const CLUTCH: f32 = 2800.0;
 /// The ignition cut while a gear goes in (s).
 const SHIFT: f32 = 0.11;
 
 /// Levels.
 const MUSIC: f32 = 0.32;
-const ENGINE_PLAYER: f32 = 0.55;
-const ENGINE_RIVAL: f32 = 0.5;
+/// Kept low: any louder and the engines read too heavy at full throttle.
+const ENGINE_PLAYER: f32 = 0.4125;
+const ENGINE_RIVAL: f32 = 0.375;
 const STING: f32 = 0.5;
 /// The player's tyres squeal from this sideways speed (m/s), well before the
 /// slide that lays skid marks (`car::SLIDE`), up to their loudest here.
@@ -275,7 +282,7 @@ pub fn rev(e: &mut Engine, car: &Car, climb: f32, racing: bool, dt: f32) {
     let gas = if car.brake { 0.0 } else { car.gas };
     if !racing {
         // On the grid: the clutch is in and the throttle is a blip.
-        let target = if gas > 0.0 { 5600.0 } else { IDLE };
+        let target = if gas > 0.0 { BLIP } else { IDLE };
         let rate = if target > e.rpm { 9000.0 } else { 4500.0 };
         e.rpm += (target - e.rpm).clamp(-rate * dt, rate * dt);
         e.gear = 0;
@@ -295,7 +302,7 @@ pub fn rev(e: &mut Engine, car: &Car, climb: f32, racing: bool, dt: f32) {
     let mut target = at(e.gear);
     if e.gear == 0 {
         // Pulling away the clutch slips, so the engine runs ahead of the wheels.
-        target = target.max(if gas > 0.0 { 4200.0 } else { IDLE });
+        target = target.max(if gas > 0.0 { CLUTCH } else { IDLE });
     }
     let target = target.clamp(IDLE, REDLINE);
     e.rpm += (target - e.rpm) * (1.0 - math::exp(-dt / 0.045));
@@ -335,13 +342,13 @@ fn slot_target(slot: &Slot, e: &Engine, level: f32) -> (u32, f32) {
     } else {
         (i + 1, gb)
     };
-    let q = e.load.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
+    let load = e.load.clamp(0.0, 1.0);
+    let q = load * std::f32::consts::FRAC_PI_2;
     let set = if slot.car != crate::PLAYER {
         // A rival's single set: a little quieter off the throttle.
-        0.7 + 0.3 * e.load
+        0.7 + 0.3 * load
     } else if slot.on {
-        // Labouring past full load, the pulling set plays louder still.
-        math::sin(q) * e.load.max(1.0)
+        math::sin(q)
     } else {
         math::cos(q)
     };
