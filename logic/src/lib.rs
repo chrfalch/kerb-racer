@@ -20,7 +20,7 @@ pub struct Options {
     pub laps: u32,
     /// Graphics: 0 low (no undergrowth), 1 medium (baked shadows, the default), 2 high (real-time sun shadows, haze and bloom).
     pub quality: u32,
-    /// Driving help: 0 none, 1 the braking guide on the road (the default),
+    /// Driving help: 0 none (the default), 1 the braking guide on the road,
     /// 2 the guide and a throttle that lifts by itself before a corner taken
     /// too fast or behind a car it cannot pass, and brakes when far too fast.
     pub assist: u32,
@@ -39,7 +39,7 @@ impl Default for Options {
             track: 0,
             laps: 3,
             quality: 1,
-            assist: 1,
+            assist: 0,
             paused: false,
             volume: 1.0,
             restart: false,

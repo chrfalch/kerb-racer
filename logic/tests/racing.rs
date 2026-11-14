@@ -500,6 +500,29 @@ fn overtakes(track: u32, k: f32) -> (i32, u32, u32) {
 }
 
 #[test]
+fn the_side_arrow_stays_hidden_while_passing() {
+    let mut game = race_with(0, 1);
+    game.key_down("KeyW");
+    let (mut passing, mut shown, mut guided) = (0, 0, 0);
+    for _ in 0..(120 * 60) {
+        game.run(TICK);
+        let w = game.world();
+        if w.require::<Car>("player").pass != 0 {
+            passing += 1;
+        }
+        if w.require::<Visible>("side-arrow").0 {
+            shown += 1;
+        }
+        if w.require::<Visible>("guide-0").0 {
+            guided += 1;
+        }
+    }
+    assert!(passing > 0, "the player passes someone in a minute flat out");
+    assert_eq!(shown, 0, "the arrow beside the car stays hidden");
+    assert!(guided > 0, "the braking guide still shows at assist 1");
+}
+
+#[test]
 fn a_faster_driver_makes_passes_stick() {
     let mut total = 0;
     for id in [0, 1, 2, 4] {

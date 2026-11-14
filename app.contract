@@ -150,7 +150,7 @@ keyframes light4
 component KerbRacers
   state playing = false
   state track = 0
-  state assist = 1
+  state assist = 0
   state again = false
   state paused = false
   state hint = 0
