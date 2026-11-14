@@ -35,8 +35,6 @@ shape Hud
   speed: number
   gas: bool
   brake: bool
-  air: bool
-  draft: bool
   off: bool
   standings: Row[]
   radar: Radar
@@ -228,11 +226,7 @@ component KerbRacers
                 text r.name width=40 font-weight=700 color=(r.you ? "#22252b" : "#fbf6e9")
                 text r.time font-size=12 color=(r.you ? "#22252b" : "#c9d6b8")
           column position="absolute" left=0 right=0 bottom="calc(env(safe-area-inset-bottom) + 6px)" align-items="center" gap=8 pointer-events="none"
-            if hud.air
-              text "AIR" testId="air" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#3fa7d6e6"
-            else if hud.draft
-              text "DRAFT" testId="draft" padding=8 border-radius=10 font-weight=900 letter-spacing=2 color="#22252b" background-color="#e8eef2e6"
-            else if hud.off
+            if hud.off
               text "OFF TRACK" testId="off-track" padding=8 border-radius=10 font-weight=900 letter-spacing=2 background-color="#a4472fe6"
             row gap=14 align-items="flex-end"
               column testId="brake-light" align-items="center" gap=4 translate=(hud.brake ? "0px 3px" : "0px 0px") transition="translate 0.08s"
