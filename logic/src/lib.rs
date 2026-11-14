@@ -641,7 +641,7 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
         }
     }
     car::collide(&t, &mut list);
-    turn_wheels(w, &entities, &list);
+    turn_wheels(w, &t, &entities, &list);
     let shake = list
         .iter()
         .find(|b| b.car.id == PLAYER)
@@ -673,10 +673,8 @@ fn race(w: &mut World, input: &Input, now: u64, start: u64, laps: u32) {
         }
         let car = &body.car;
         let mut pose = w.require_mut::<Transform>(*e);
-        pose.position = Vec3::new(body.p.x, car.y + car.squash, body.p.y);
-        pose.rotation = Quat::from_rotation_y(-car.heading)
-            * Quat::from_rotation_z(car.pitch)
-            * Quat::from_rotation_x(car.lean);
+        pose.position = Vec3::new(body.p.x, car.y + car.squash + car.rise, body.p.y);
+        pose.rotation = car::body_rotation(car);
         drop(pose);
         let speed = Vec2::new(car.vx, car.vz).length();
         // The shadow lies on the ground below: in the air it slides away from
@@ -741,7 +739,7 @@ fn throttle(gas: f32, held: bool, dt: f32) -> f32 {
 
 /// Each wheel turns by its car's `spin` (rolling forward about the axle, which
 /// runs along local Z) and the front pair also steers.
-fn turn_wheels(w: &mut World, cars: &[Entity], bodies: &[Body]) {
+fn turn_wheels(w: &mut World, t: &Track, cars: &[Entity], bodies: &[Body]) {
     let wheels: Vec<(Entity, Entity, bool)> = w
         .query::<(&Parent, &Wheel)>()
         .iter()
@@ -755,11 +753,12 @@ fn turn_wheels(w: &mut World, cars: &[Entity], bodies: &[Body]) {
         let steer = if front { car.steer } else { 0.0 };
         // Heading grows toward the car's local +Z, so a turn that way is -Y.
         let rotation = Quat::from_rotation_y(-steer) * Quat::from_rotation_z(-car.spin);
-        // The wheels stay on the road while the body squashes, and hang a
-        // little in the air.
-        let y = car::WHEEL_R - car.squash - if car.air { 0.07 } else { 0.0 };
         // Read first: a mutable borrow marks the row written even when nothing changes.
         let pose = *w.require::<Transform>(e);
+        // The wheels stay on the road while the body squashes or tilts more
+        // than the ground, and hang a little in the air.
+        let drop = car::wheel_drop(t, &bodies[k], Vec2::new(pose.position.x, pose.position.z));
+        let y = car::WHEEL_R - car.squash - drop - if car.air { 0.07 } else { 0.0 };
         if pose.rotation != rotation || pose.position.y != y {
             let mut pose = w.require_mut::<Transform>(e);
             pose.rotation = rotation;
@@ -1023,6 +1022,9 @@ fn rain(w: &mut World) {
     let _ = rain;
 }
 
+/// How far ahead (s at the player's speed) the camera's focus leads.
+const LEAD: f32 = 0.38;
+
 /// Ease the camera's focus toward a point ahead of the player.
 fn camera(w: &mut World, snap: bool) {
     let (p, v, idx) = {
@@ -1034,15 +1036,25 @@ fn camera(w: &mut World, snap: bool) {
             car.idx as usize,
         )
     };
+    let speed = v.length();
     // Lead along the road, and a little toward the inside of the corner coming up.
-    let (turn, normal) = {
+    let (turn, normal, rise) = {
         let t = w.resource::<Track>();
         let ahead = t.wrap(idx as i64 + (20.0 / t.step) as i64);
-        (t.turn_ahead(idx), t.normal(ahead))
+        // Half the centreline's climb to the point the view leads to: it looks
+        // up a hill and over a crest early, yet leaves the car to climb on screen.
+        let (a, _, u, _) = t.frame(p, idx);
+        let height = |s: f32| {
+            let k = math::floor(s);
+            let (i, j) = (t.wrap(k as i64), t.wrap(k as i64 + 1));
+            t.y[i] + (t.y[j] - t.y[i]) * (s - k)
+        };
+        let here = a as f32 + u;
+        let rise = (height(here + speed * LEAD / t.step) - height(here)) / 2.0;
+        (t.turn_ahead(idx), t.normal(ahead), rise)
     };
-    let speed = v.length();
-    let target = p + v * 0.38 + normal * (turn * 2.5);
-    let ground = w.require::<Car>("player").y;
+    let target = p + v * LEAD + normal * (turn * 2.5);
+    let level = w.require::<Car>("player").y + rise;
     let dt = w.dt();
     let now = w.tick() as f32 * dt;
     let (focus, shake, lift) = {
@@ -1050,9 +1062,10 @@ fn camera(w: &mut World, snap: bool) {
         let k = if snap { 1.0 } else { (dt * 3.0).min(1.0) };
         race.focus_x += (target.x - race.focus_x) * k;
         race.focus_z += (target.y - race.focus_z) * k;
-        // Heights ease slower, so bumps and jumps don't bob the view.
-        let ky = if snap { 1.0 } else { (dt * 1.5).min(1.0) };
-        race.focus_y += (ground - race.focus_y) * ky;
+        // Heights ease slower, so bumps and jumps don't bob the view, and
+        // slow enough that the car climbs and drops on screen with a hill.
+        let ky = if snap { 1.0 } else { (dt * 0.5).min(1.0) };
+        race.focus_y += (level - race.focus_y) * ky;
         race.shake *= 1.0 - (dt * 7.0).min(1.0);
         // Pull back a little at speed, to see more of what is coming.
         let lift = 30.0 + 4.0 * (speed / track::VMAX).clamp(0.0, 1.0);

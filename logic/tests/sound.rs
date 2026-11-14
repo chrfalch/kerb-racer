@@ -96,6 +96,30 @@ fn the_engine_revs_on_the_grid_and_climbs_the_gears() {
 }
 
 #[test]
+fn the_engine_labours_uphill_and_eases_downhill() {
+    let pull = |gas: f32, climb: f32| {
+        let car = Car {
+            gas,
+            roll: 20.0,
+            ..Car::default()
+        };
+        let mut e = Engine::default();
+        for _ in 0..120 {
+            sound::rev(&mut e, &car, climb, true, 1.0 / 120.0);
+        }
+        e.load
+    };
+    // Flat out as well as part throttle: most of a lap is flat out.
+    for gas in [1.0, 0.5] {
+        let (up, level, down) = (pull(gas, 0.15), pull(gas, 0.0), pull(gas, -0.15));
+        println!("gas {gas}: load uphill {up:.2}, level {level:.2}, downhill {down:.2}");
+        assert!(up > level + 0.1 && level > down + 0.1, "gas {gas}: {up} {level} {down}");
+    }
+    let (steep, cliff) = (pull(1.0, 0.6), pull(0.0, -0.6));
+    assert!(steep < 1.5 && cliff >= 0.0, "clamped: {steep} {cliff}");
+}
+
+#[test]
 fn the_race_is_heard_within_the_voice_budget() {
     let mut game = race(0);
     game.run(200.0);
