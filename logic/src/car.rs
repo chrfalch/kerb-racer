@@ -153,6 +153,8 @@ pub struct Car {
     pub locked: bool,
     /// Metres travelled since this car last laid a skid mark.
     pub skid_run: f32,
+    /// Seconds the brake lamps stay lit after the brake lets go.
+    pub lamp_hold: f32,
     /// How hard (m/s of closing speed) it hit another car this tick; 0 if not.
     pub bump: f32,
 }

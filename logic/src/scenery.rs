@@ -86,6 +86,27 @@ impl Builder {
             .indices
             .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
+    /// A soft spot facing `out`: `core` colour at the centre fading to `rim` at
+    /// the ring, for a light seen through its own lens.
+    pub fn glow(&mut self, centre: Vec3, ring: &[Vec3], out: Vec3, core: [f32; 4], rim: [f32; 4]) {
+        let n = out.normalize_or_zero();
+        let base = (self.m.positions.len() / 3) as u32;
+        for (p, c) in std::iter::once((centre, core)).chain(ring.iter().map(|&p| (p, rim))) {
+            self.m.positions.extend([p.x, p.y, p.z]);
+            self.m.normals.extend([n.x, n.y, n.z]);
+            self.m.uvs.extend([0.0, 0.0]);
+            self.m.colors.extend(c);
+            self.lo = self.lo.min(p);
+            self.hi = self.hi.max(p);
+        }
+        for k in 0..ring.len() as u32 {
+            let (a, b) = (base + 1 + k, base + 1 + (k + 1) % ring.len() as u32);
+            let facing = (ring[(a - base - 1) as usize] - centre)
+                .cross(ring[(b - base - 1) as usize] - centre)
+                .dot(n);
+            self.m.indices.extend(if facing >= 0.0 { [base, a, b] } else { [base, b, a] });
+        }
+    }
     /// An upward quad with texture coordinates at its corners.
     pub fn quad_uv(&mut self, q: [Vec3; 4], uv: [Vec2; 4], color: [f32; 4]) {
         self.quad_uvc(q, uv, [color; 4]);
@@ -1564,56 +1585,46 @@ pub fn skid_mark() -> Model {
 /// behind, which is what shows from high above.
 pub fn brake_lamps(x: f32, y: f32, z: f32) -> Model {
     let mut lamps = Builder::new();
-    let white = [1.0; 4];
+    let core = [1.0, 1.0, 1.0, 0.85];
+    let rim = [1.0, 1.0, 1.0, 0.0];
     for s in [-1.0f32, 1.0] {
-        let (z0, z1) = (s * z - 0.16, s * z + 0.16);
-        lamps.face(
-            [
-                Vec3::new(x, y - 0.08, z0),
-                Vec3::new(x, y - 0.08, z1),
-                Vec3::new(x, y + 0.08, z1),
-                Vec3::new(x, y + 0.08, z0),
-            ],
-            Vec3::NEG_X,
-            white,
-        );
-        lamps.quad_up(
-            Vec3::new(x, y + 0.08, z0),
-            Vec3::new(x + 0.14, y + 0.08, z0),
-            Vec3::new(x + 0.14, y + 0.08, z1),
-            Vec3::new(x, y + 0.08, z1),
-            white,
-        );
+        let centre = Vec3::new(x, y, s * z);
+        let ring: Vec<Vec3> = (0..12)
+            .map(|k| {
+                let a = k as f32 * std::f32::consts::TAU / 12.0;
+                let (s, c) = math::sin_cos(a);
+                centre + Vec3::new(0.0, 0.11 * s, 0.22 * c)
+            })
+            .collect();
+        lamps.glow(centre, &ring, Vec3::NEG_X, core, rim);
     }
+    // Red light on the road behind: an oval that fades out on every side, so
+    // it reads as light, not as a painted patch.
     let mut wash = Builder::new();
-    let (near, far, half) = (x + 0.1, x - 1.5, 1.05);
-    let lit = [1.0, 1.0, 1.0, 0.5];
-    let dark = [1.0, 1.0, 1.0, 0.0];
-    wash.quad_uvc(
-        [
-            Vec3::new(far, 0.06, -half),
-            Vec3::new(near, 0.06, -half),
-            Vec3::new(near, 0.06, half),
-            Vec3::new(far, 0.06, half),
-        ],
-        [Vec2::ZERO; 4],
-        [dark, lit, lit, dark],
-    );
+    let centre = Vec3::new(x - 0.55, 0.06, 0.0);
+    let ring: Vec<Vec3> = (0..16)
+        .map(|k| {
+            let (s, c) = math::sin_cos(k as f32 * std::f32::consts::TAU / 16.0);
+            centre + Vec3::new(0.75 * c, 0.0, 0.85 * s)
+        })
+        .collect();
+    wash.glow(centre, &ring, Vec3::Y, [1.0, 1.0, 1.0, 0.3], [1.0, 1.0, 1.0, 0.0]);
     let mut wash = wash.finish();
     wash.material = 1;
     model(
         vec![lamps.finish(), wash],
         vec![
             MaterialData {
-                base_color: [0.0, 0.0, 0.0, 1.0],
+                base_color: [0.9, 0.05, 0.03, 1.0],
                 metallic: 0.0,
-                emissive: [6.0, 0.3, 0.15],
+                emissive: [2.4, 0.12, 0.06],
+                alpha_mode: AlphaMode::Blend,
                 ..MaterialData::default()
             },
             MaterialData {
                 base_color: [0.9, 0.05, 0.03, 1.0],
                 metallic: 0.0,
-                emissive: [1.2, 0.06, 0.03],
+                emissive: [0.8, 0.04, 0.02],
                 alpha_mode: AlphaMode::Blend,
                 ..MaterialData::default()
             },
