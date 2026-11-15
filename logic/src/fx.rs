@@ -128,11 +128,27 @@ fn show(w: &mut World, name: &str, on: bool) {
     }
 }
 
+/// How long the brake lamps stay lit after the brake lets go (s). A rival
+/// holding its target speed taps the brake every few ticks; without the hold
+/// its lamps flicker.
+pub const LAMP_HOLD: f32 = 0.35;
+
+/// Whether the brake lamps are lit this tick.
+pub fn brake_lamp(hold: &mut f32, brake: bool, dt: f32) -> bool {
+    if brake {
+        *hold = LAMP_HOLD;
+        return true;
+    }
+    *hold = (*hold - dt).max(0.0);
+    *hold > 0.0
+}
+
 /// One car's lamps, streaks and skid marks, after it has moved this tick.
 pub fn car(w: &mut World, t: &Track, body: &mut Body, name: &str, dt: f32) {
+    let lamp = brake_lamp(&mut body.car.lamp_hold, body.car.brake, dt);
     let car = body.car.clone();
     let speed = body.v().length();
-    show(w, &format!("{name}-lamps"), car.brake && speed > 0.5);
+    show(w, &format!("{name}-lamps"), lamp && speed > 0.5);
     let streaks = car.draft > 0.35 && speed > 12.0;
     let draft = format!("{name}-draft");
     if w.require::<Emitter>(draft.as_str()).running != streaks {
